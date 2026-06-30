@@ -1,0 +1,3690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>WNCleaning — Disk Inventory</title>
+<style>
+  :root {
+    --bg: oklch(16% 0.01 260);
+    --panel: oklch(22% 0.015 260);
+    --panel-2: oklch(26% 0.02 260);
+    --text: oklch(94% 0 0);
+    --muted: oklch(68% 0.01 260);
+    --accent: oklch(74% 0.16 200);
+    --accent-2: oklch(78% 0.18 150);
+    --danger: oklch(70% 0.20 25);
+    --border: oklch(34% 0.01 260);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+  header {
+    padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 18px;
+  }
+  header h1 {
+    margin: 0; font-size: clamp(1.6rem, 1rem + 1vw, 2.4rem);
+    letter-spacing: -0.02em; font-weight: 700;
+  }
+  header .sub { color: var(--muted); font-size: 0.95rem; }
+  main {
+    --sidebar-w: 320px;
+    display: grid; grid-template-columns: var(--sidebar-w) 6px 1fr; gap: 0;
+    height: calc(100vh - 64px); min-height: 0;
+  }
+  aside {
+    border-right: 1px solid var(--border); padding: 20px; overflow-y: auto;
+    background: var(--panel); min-width: 0;
+  }
+  .v-resizer {
+    cursor: col-resize; background: var(--border); position: relative;
+    transition: background 120ms ease;
+  }
+  .v-resizer:hover, .v-resizer.dragging { background: var(--accent); }
+  .v-resizer::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px;
+  }
+
+  /* === Uniform collapsible+resizable panel system === */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+    margin-bottom: 10px; position: relative;
+  }
+  .panel.collapsed { height: auto !important; }
+  .panel.collapsed .panel-body, .panel.collapsed .panel-resizer { display: none; }
+  .panel-header {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    cursor: pointer; user-select: none; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+    transition: color 120ms ease, background 120ms ease;
+  }
+  .panel-header:hover { color: var(--text); background: oklch(28% 0.02 260); }
+  .panel.collapsed .panel-header { border-bottom: none; }
+  .panel-chevron {
+    display: inline-block; width: 10px; height: 10px;
+    transition: transform 150ms ease; transform: rotate(90deg);
+    border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform-origin: 60% 60%;
+  }
+  .panel.collapsed .panel-chevron { transform: rotate(-45deg); }
+  .panel-chevron-open { transform: rotate(45deg); }
+  .panel-title { flex: 1; }
+  .panel-meta { font-size: 0.68rem; color: var(--muted); font-weight: 500;
+    text-transform: none; letter-spacing: 0; }
+  .panel-body { padding: 12px 14px; overflow: auto; flex: 1; min-height: 0; }
+  .panel-resizer {
+    height: 6px; background: transparent; cursor: row-resize;
+    border-top: 1px solid var(--border);
+    transition: background 120ms ease;
+  }
+  .panel-resizer:hover, .panel-resizer.dragging { background: var(--accent); }
+  /* The file table panel is the focus — it grows to fill remaining space. */
+  .panel.grow { flex: 1; min-height: 200px; }
+  .panel.grow .panel-body { padding: 0; }
+  /* Reset-layout button. */
+  .reset-layout-btn {
+    margin-left: auto; background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+    font-size: 0.72rem; cursor: pointer; letter-spacing: 0.05em;
+  }
+  .reset-layout-btn:hover { color: var(--text); border-color: var(--accent); }
+  tr.trashed td { text-decoration: line-through; color: var(--muted); opacity: 0.7; }
+  tr.trashed td.path { color: var(--danger); }
+  .trash-badge {
+    display: inline-block; font-size: 0.65rem; padding: 1px 6px;
+    border: 1px solid var(--danger); color: var(--danger);
+    border-radius: 3px; margin-left: 6px; letter-spacing: 0.05em;
+    text-transform: uppercase; vertical-align: middle;
+  }
+  .restored-badge {
+    border-color: var(--accent-2); color: var(--accent-2);
+  }
+
+  /* Plan run floating panel. */
+  .run-panel {
+    position: fixed; bottom: 20px; left: 20px; z-index: 150;
+    background: var(--panel); border: 1px solid var(--accent);
+    border-radius: 10px; padding: 14px 18px; min-width: 340px; max-width: 460px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .run-panel h4 {
+    margin: 0 0 6px; font-size: 0.78rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+  }
+  .run-panel .run-line { font-size: 0.85rem; margin-bottom: 4px; }
+  .run-panel .run-meta { font-size: 0.75rem; color: var(--muted); margin-bottom: 8px; }
+  .run-panel .run-bar {
+    height: 6px; background: var(--panel-2); border-radius: 3px;
+    overflow: hidden; margin-bottom: 8px;
+  }
+  .run-panel .run-bar > div { height: 100%; background: var(--accent-2); transition: width 250ms ease; }
+  .run-panel .run-current {
+    font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 8px;
+  }
+  .run-panel .run-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+  /* Toast notifications. */
+  .toast-stack {
+    position: fixed; bottom: 20px; right: 20px; z-index: 200;
+    display: flex; flex-direction: column; gap: 8px; max-width: 340px;
+  }
+  .toast {
+    background: var(--panel); border: 1px solid var(--accent-2);
+    border-radius: 8px; padding: 10px 14px; color: var(--text);
+    font-size: 0.85rem; box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    animation: toast-in 200ms ease-out;
+  }
+  .toast.error { border-color: var(--danger); }
+  @keyframes toast-in { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* Plan modal. */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 24px; max-width: 560px; width: 90%; max-height: 85vh; overflow-y: auto;
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 1.1rem; }
+  .modal label {
+    display: block; margin-bottom: 12px; font-size: 0.78rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .modal label > select,
+  .modal label > input:not([type="checkbox"]):not([type="radio"]) {
+    display: block; margin-top: 4px; width: 100%;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 8px 10px; border-radius: 7px; font-size: 0.9rem;
+    text-transform: none; letter-spacing: 0;
+  }
+  .modal .modal-actions {
+    display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end;
+  }
+  .modal .source-order {
+    list-style: none; padding: 0; margin: 0;
+  }
+  .modal .source-order li {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;
+    font-size: 0.85rem; text-transform: none; letter-spacing: 0; color: var(--text);
+  }
+  .modal .source-order .move-btns button {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 0.7rem;
+  }
+  .modal .source-order .move-btns button:hover { color: var(--text); }
+  .plan-item {
+    padding: 10px 12px; border-radius: 8px; margin-bottom: 6px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 0.82rem;
+  }
+  .plan-item .plan-meta { color: var(--muted); font-size: 0.72rem; margin-top: 4px; }
+  /* Collapsed sidebar mode. */
+  aside.collapsed { padding: 12px 8px; }
+  aside.collapsed > *:not(.sidebar-toggle) { display: none; }
+  .sidebar-toggle {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font-size: 0.78rem; cursor: pointer;
+    width: 100%; margin-bottom: 10px;
+  }
+  .sidebar-toggle:hover { color: var(--text); border-color: var(--accent); }
+  /* Content area becomes a vertical flex of panels. */
+  section.content { gap: 0; }
+  aside h2 {
+    margin: 0 0 12px; font-size: 0.75rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+  }
+  .vol {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-radius: 10px; margin-bottom: 8px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    transition: border-color 150ms ease, transform 150ms ease;
+  }
+  .vol:hover { border-color: var(--accent); }
+  .vol .name { font-weight: 600; }
+  .vol .path { font-size: 0.78rem; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .vol button {
+    background: var(--accent); color: oklch(15% 0 0); border: none;
+    padding: 6px 12px; border-radius: 6px; font-weight: 600;
+    cursor: pointer; font-size: 0.82rem;
+  }
+  .vol button:disabled { opacity: 0.5; cursor: progress; }
+  .scans { margin-top: 24px; }
+  .scan-item {
+    padding: 10px 12px; border-radius: 8px; margin-bottom: 6px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    cursor: pointer; font-size: 0.85rem;
+    transition: border-color 150ms ease;
+  }
+  .scan-item:hover { border-color: var(--accent-2); }
+  .scan-item.active { border-color: var(--accent); background: oklch(30% 0.04 200); }
+  .scan-item .root { font-weight: 600; word-break: break-all; }
+  .scan-item .meta { color: var(--muted); font-size: 0.75rem; margin-top: 4px; }
+  section.content { padding: 16px 20px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .toolbar {
+    display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar input, .toolbar select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    padding: 8px 12px; border-radius: 8px; font-size: 0.9rem;
+  }
+  .toolbar input { min-width: 280px; }
+  .stats {
+    display: flex; gap: 24px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .stat { background: var(--panel); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); }
+  .stat .label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .stat .value { font-size: 1.4rem; font-weight: 700; margin-top: 4px; }
+  .table-wrap { flex: 1; min-height: 0; overflow: auto; }
+  /* Table width is set explicitly by JS (lockTableWidth) so column resizes don't reflow others. */
+  table { border-collapse: collapse; font-size: 0.86rem; table-layout: fixed; }
+  thead { position: sticky; top: 0; background: var(--panel-2); z-index: 1; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  th { font-weight: 600; cursor: pointer; user-select: none; color: var(--muted); position: relative; }
+  th:hover { color: var(--text); }
+  /* Resizer handle on the right edge of each resizable header. */
+  th.resizable .col-resizer {
+    position: absolute; top: 0; right: 0; width: 6px; height: 100%;
+    cursor: col-resize; user-select: none;
+  }
+  th.resizable .col-resizer:hover, th.resizable .col-resizer.dragging {
+    background: var(--accent);
+  }
+  tbody tr:hover { background: oklch(28% 0.02 260); }
+  td.size, td.ext { white-space: nowrap; }
+  td.path { color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.78rem; }
+  .empty { padding: 60px 20px; text-align: center; color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border); font-size: 0.72rem; color: var(--muted); }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
+  .scan-progress {
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 10px;
+    padding: 14px 18px; margin-bottom: 16px;
+  }
+  .scan-progress strong { color: var(--accent); font-weight: 600; }
+  .progress-stats { margin-top: 6px; font-size: 1.05rem; font-weight: 600; }
+  .progress-dir {
+    margin-top: 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes plan-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .plan-item.plan-running strong::before {
+    content: '◉'; color: var(--accent-2);
+    display: inline-block; margin-right: 6px;
+    animation: plan-pulse 1.2s ease-in-out infinite;
+  }
+  .filter-panel { margin-bottom: 14px; }
+  .filter-panel details {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px;
+  }
+  .filter-panel summary {
+    font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; cursor: pointer; padding: 6px 0;
+    list-style: none;
+  }
+  .filter-panel summary::-webkit-details-marker { display: none; }
+  .filter-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 14px; padding: 12px 0 4px;
+  }
+  .filter-grid label {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .filter-grid input, .filter-grid select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 7px 10px; border-radius: 7px; font-size: 0.9rem; text-transform: none; letter-spacing: 0;
+    font-family: inherit;
+  }
+  .filter-grid select[multiple] { padding: 4px; }
+  .dupe-label { flex-direction: row !important; align-items: center; gap: 8px !important;
+    font-size: 0.85rem !important; color: var(--text) !important; text-transform: none !important;
+    letter-spacing: 0 !important; }
+  .ghost-btn {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    padding: 7px 14px; border-radius: 7px; font-size: 0.85rem; cursor: pointer;
+    align-self: end;
+  }
+  .ghost-btn:hover { border-color: var(--accent); }
+  .primary-btn {
+    background: var(--accent-2); color: oklch(15% 0 0); border: none;
+    padding: 9px 16px; border-radius: 8px; font-weight: 600; cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .basket-badge { border-color: var(--accent-2); color: var(--accent-2); }
+  .check-col { width: 32px; }
+  .check-col input { cursor: pointer; }
+  tr.dupe-group-a { background: oklch(28% 0.04 30 / 0.4); }
+  tr.dupe-group-b { background: oklch(28% 0.04 90 / 0.4); }
+  tr.dupe-group-c { background: oklch(28% 0.04 150 / 0.4); }
+  tr.dupe-group-d { background: oklch(28% 0.04 210 / 0.4); }
+  tr.dupe-group-e { background: oklch(28% 0.04 280 / 0.4); }
+  tr.dupe-group-f { background: oklch(28% 0.04 340 / 0.4); }
+  .basket-panel {
+    margin-top: 14px; background: var(--panel); border: 1px solid var(--accent-2);
+    border-radius: 10px; padding: 14px 18px;
+  }
+  .basket-summary {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px;
+  }
+  .basket-actions {
+    display: flex; gap: 12px; align-items: end; flex-wrap: wrap;
+  }
+  .basket-actions label {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+    flex: 1; min-width: 240px;
+  }
+  .basket-actions select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 9px 12px; border-radius: 7px; font-size: 0.9rem; text-transform: none;
+  }
+  .copy-result {
+    margin-top: 12px; padding: 10px 14px; border-radius: 8px;
+    background: var(--panel-2); border: 1px solid var(--border); font-size: 0.85rem;
+    display: none;
+  }
+  .copy-result.show { display: block; }
+  .copy-result.ok { border-color: var(--accent-2); }
+  .copy-result.err { border-color: var(--danger); }
+  .errors-box {
+    margin-bottom: 14px; padding: 12px 16px; border: 1px solid var(--danger);
+    border-radius: 10px; background: oklch(22% 0.04 25 / 0.5);
+    max-height: calc(100vh - 320px); overflow-y: auto;
+  }
+  .stat-clickable { cursor: pointer; transition: border-color 120ms ease, transform 120ms ease; }
+  .stat-clickable:hover { border-color: var(--accent); }
+  .stat-active { border-color: var(--accent) !important; background: oklch(28% 0.04 200 / 0.4); }
+  .errors-box h3 {
+    margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--danger); font-weight: 600;
+  }
+  .errors-box .err-row {
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.78rem;
+    padding: 2px 0; color: var(--muted);
+  }
+  .errors-box .err-row code { color: var(--danger); margin-right: 8px; }
+  .err-pager { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .err-list { max-height: none; }
+  .bd-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .bd-card {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px;
+  }
+  .bd-card h4 {
+    margin: 0 0 8px; font-size: 0.72rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+  }
+  .bd-row {
+    display: grid; grid-template-columns: 1fr auto; align-items: center;
+    gap: 6px 10px; margin-bottom: 4px; font-size: 0.82rem;
+  }
+  .bd-row .bd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bd-row .bd-val { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.78rem; }
+  .bd-bar {
+    grid-column: 1 / -1; height: 4px; background: var(--bg); border-radius: 2px;
+    overflow: hidden; margin-top: 2px;
+  }
+  .bd-bar .bd-fill { height: 100%; background: var(--accent); }
+  .bd-bar .bd-fill.alt { background: var(--accent-2); }
+  .bd-summary {
+    margin-bottom: 10px; padding: 8px 10px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px;
+    display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.85rem;
+  }
+  .bd-summary .label { color: var(--muted); font-size: 0.7rem;
+    letter-spacing: 0.08em; text-transform: uppercase; }
+  .bd-largest-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+    align-items: center;
+    font-size: 0.78rem; padding: 4px 0; cursor: pointer;
+    border-bottom: 1px dashed transparent;
+  }
+  .bd-largest-row > div { min-width: 0; }
+  .bd-largest-row:hover { border-bottom-color: var(--border); }
+  .bd-largest-row .bd-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bd-largest-row .bd-path { color: var(--muted); font-family: ui-monospace, monospace;
+    font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bd-largest-row .bd-actions {
+    display: flex; align-items: center; gap: 8px;
+    flex-shrink: 0; white-space: nowrap;
+  }
+  .bd-largest-row .bd-val { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WNCleaning</h1>
+  <span class="sub">Disk inventory dashboard · scan on demand</span>
+  <button id="backupWizardBtn" class="reset-layout-btn"
+    style="margin-left:auto; background: var(--accent-2); color: oklch(15% 0 0); border-color: var(--accent-2); font-weight: 600;"
+    title="Guided workflow: scan each drive, then copy a deduplicated backup to one destination">
+    🛟 Create perfect backup
+  </button>
+  <label style="display:flex; align-items:center; gap:6px; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;"
+         title="How long to keep Trash audit history per scan">
+    Trash log
+    <select id="trashRetentionSelect" style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.78rem; text-transform: none; letter-spacing: 0;">
+      <option value="forever">Forever</option>
+      <option value="30d">30 days</option>
+      <option value="24h">24 hours</option>
+    </select>
+  </label>
+  <button class="reset-layout-btn" id="expandAllBtn" title="Expand every panel and let the main section scroll vertically">Expand all</button>
+  <button class="reset-layout-btn" id="resetLayoutBtn" title="Reset all panel sizes and collapsed states">Reset layout</button>
+</header>
+<main>
+  <aside id="sidebar">
+    <button class="sidebar-toggle" id="sidebarToggle" title="Collapse / expand sidebar">◀ Hide sidebar</button>
+    <h2>Volumes</h2>
+    <div id="volumes"></div>
+    <div class="scans">
+      <h2>Saved scans</h2>
+      <div id="scansList"></div>
+    </div>
+    <div style="margin-top: 24px;">
+      <h2>Copy plans</h2>
+      <div id="plansList"></div>
+      <button id="newPlanBtn" class="ghost-btn" style="margin-top: 10px; width: 100%;" disabled
+        title="Tick 1 or more saved scans first">
+        + Build copy plan from selected scans
+      </button>
+    </div>
+  </aside>
+  <div class="v-resizer" id="sidebarResizer" title="Drag to resize sidebar"></div>
+  <section class="content">
+    <div class="panel" data-panel="filters">
+      <div class="panel-header" data-toggle>
+        <span class="panel-chevron panel-chevron-open"></span>
+        <span class="panel-title">Filters</span>
+        <span class="panel-meta">click header to collapse · drag bottom to resize</span>
+      </div>
+      <div class="panel-body">
+        <div class="filter-grid">
+          <label>Name contains <input id="fName" type="text" placeholder="e.g. IMG_" /></label>
+          <label>Path contains <input id="fPath" type="text" placeholder="e.g. /Photos/" /></label>
+          <label>Top folder <select id="fTopFolder"><option value="">Any</option></select></label>
+          <label>Extensions <select id="fExt" multiple size="4"></select></label>
+          <label>Min size <input id="fMinSize" type="text" placeholder="0" /></label>
+          <label>Max size <input id="fMaxSize" type="text" placeholder="∞" /></label>
+          <label>Modified after <input id="fAfter" type="date" /></label>
+          <label>Modified before <input id="fBefore" type="date" /></label>
+          <label>Age bucket
+            <select id="fAge">
+              <option value="">Any</option>
+              <option value="day">Today (≤1 day)</option>
+              <option value="week">This week (≤7 days)</option>
+              <option value="month">This month (≤30 days)</option>
+              <option value="year">This year (≤365 days)</option>
+              <option value="old">Older (&gt;1 year)</option>
+              <option value="ancient">Ancient (&gt;5 years)</option>
+            </select>
+          </label>
+          <label>Category
+            <select id="fCategory" multiple size="4">
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+              <option value="audio">Audio</option>
+              <option value="document">Document</option>
+              <option value="archive">Archive</option>
+              <option value="code">Code</option>
+              <option value="binary">Binary / Disk image</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>Min path depth <input id="fMinDepth" type="number" min="0" placeholder="0" /></label>
+          <label>Max path depth <input id="fMaxDepth" type="number" min="0" placeholder="∞" /></label>
+          <label class="dupe-label">
+            <input id="fDuplicates" type="checkbox" /> Show only duplicates (size + name + ext)
+          </label>
+          <label class="dupe-label">
+            <input id="fHideDupes" type="checkbox" /> Hide duplicates (keep one of each — shortest path)
+          </label>
+          <button id="fClear" class="ghost-btn">Clear filters</button>
+        </div>
+      </div>
+      <div class="panel-resizer" data-resize></div>
+    </div>
+
+    <div class="panel" data-panel="breakdown">
+      <div class="panel-header" data-toggle>
+        <span class="panel-chevron panel-chevron-open"></span>
+        <span class="panel-title">Breakdown of filtered results</span>
+        <span class="panel-meta">categories · age · top extensions · top folders · largest files</span>
+      </div>
+      <div class="panel-body" id="breakdownBody"></div>
+      <div class="panel-resizer" data-resize></div>
+    </div>
+
+    <div class="panel" data-panel="plan" id="planPanel">
+      <div class="panel-header" data-toggle>
+        <span class="panel-chevron panel-chevron-open"></span>
+        <span class="panel-title">Plan</span>
+        <span class="panel-meta" id="planPanelMeta">0 files · 0 B</span>
+      </div>
+      <div class="panel-body">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap; margin-bottom: 12px;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">
+            Active plan
+            <select id="planActiveSelect" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:6px 10px; border-radius:7px; font-size:0.9rem; text-transform:none; letter-spacing:0;">
+              <option value="working.plan.json">Working plan</option>
+            </select>
+          </label>
+          <button id="planClearBtn" class="ghost-btn">Clear</button>
+          <button id="planSaveAsBtn" class="ghost-btn">Save as…</button>
+          <button id="planOpenInViewBtn" class="ghost-btn">Open in view</button>
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-bottom:12px;">
+          <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Destination
+            <div style="display:flex; gap:6px; margin-top:4px;">
+              <select id="planDestSelect" style="flex:1; min-width:0; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem; text-transform:none; letter-spacing:0;">
+                <option value="">Choose…</option>
+              </select>
+              <button id="planDestBrowse" class="ghost-btn" type="button"
+                style="white-space:nowrap; text-transform:none; letter-spacing:0; font-size:0.78rem; padding:8px 10px;"
+                title="Pick any folder anywhere with Finder">Browse…</button>
+            </div>
+            <div id="planDestPath" style="margin-top:4px; font-family: ui-monospace, monospace; font-size:0.72rem; color:var(--muted); text-transform:none; letter-spacing:0; word-break: break-all;"></div>
+          </label>
+          <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Layout
+            <select id="planLayoutSelect" style="display:block; width:100%; margin-top:4px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem; text-transform:none; letter-spacing:0;">
+              <option value="mirrored">Mirrored per drive</option>
+              <option value="flat">Flat (one folder)</option>
+            </select>
+          </label>
+          <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Dest mode
+            <select id="planDestModeSelect" style="display:block; width:100%; margin-top:4px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem; text-transform:none; letter-spacing:0;">
+              <option value="additive">Additive (skip existing)</option>
+              <option value="overwrite">Overwrite</option>
+              <option value="fresh">Fresh (dest must be empty)</option>
+            </select>
+          </label>
+          <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Tie-break
+            <select id="planTieBreakSelect" style="display:block; width:100%; margin-top:4px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem; text-transform:none; letter-spacing:0;">
+              <option value="firstScanned">First drive scanned</option>
+              <option value="newest">Newest modified</option>
+              <option value="oldest">Oldest modified</option>
+              <option value="shortestPath">Shortest source path</option>
+              <option value="largest">Largest size</option>
+            </select>
+          </label>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap;">
+          <button id="planRunBtn" class="primary-btn" disabled title="Phase 3 — coming next">Run plan</button>
+          <button id="openProjectDedupBtn" class="ghost-btn" type="button"
+            title="Configure project detection: which folders count as a project, and how aggressively to dedup them">
+            ⚙ Project detection…
+          </button>
+          <span id="planSettingsStatus" style="color:var(--muted); font-size:0.78rem;"></span>
+        </div>
+      </div>
+      <div class="panel-resizer" data-resize></div>
+    </div>
+
+    <div class="panel" data-panel="status">
+      <div class="panel-header" data-toggle>
+        <span class="panel-chevron panel-chevron-open"></span>
+        <span class="panel-title">Status & errors</span>
+        <span class="panel-meta">scan progress · stats · error log</span>
+      </div>
+      <div class="panel-body">
+        <div class="toolbar">
+          <span id="count" class="badge">No scan loaded</span>
+          <span id="basketBadge" class="badge basket-badge">Basket: 0</span>
+        </div>
+        <div id="scanProgress" class="scan-progress" style="display:none;"></div>
+        <div class="stats" id="stats"></div>
+        <div id="errorsBox" class="errors-box" style="display:none;"></div>
+      </div>
+      <div class="panel-resizer" data-resize></div>
+    </div>
+
+    <div class="panel grow" data-panel="files">
+      <div class="panel-header" data-toggle>
+        <span class="panel-chevron panel-chevron-open"></span>
+        <span class="panel-title">Files</span>
+        <span class="panel-meta">drag column edges to resize · click headers to sort</span>
+        <button id="addFilteredBtn" class="ghost-btn" style="margin-left:auto; font-size:0.72rem; padding:4px 10px;"
+          title="Add every file matching the current filters into the active plan">+ Add filtered (0) to plan</button>
+        <button id="addCheckedBtn" class="ghost-btn" style="font-size:0.72rem; padding:4px 10px;"
+          title="Add every checked row into the active plan">+ Add checked (0) to plan</button>
+        <button id="trashCheckedBtn" class="ghost-btn" style="font-size:0.72rem; padding:4px 10px; border-color: var(--danger); color: var(--danger);"
+          title="Move every checked file to the Trash (triple-confirm). The only deletion action in the app.">🗑 Send checked (0) to Trash</button>
+      </div>
+      <div class="panel-body table-wrap">
+      <table id="filesTable">
+        <colgroup>
+          <col data-col="check" style="width: 28px;" />
+          <col data-col="name" style="width: 140px;" />
+          <col data-col="ext" style="width: 48px;" />
+          <col data-col="category" style="width: 72px;" />
+          <col data-col="size" style="width: 72px;" />
+          <col data-col="mtime" style="width: 110px;" />
+          <col data-col="age" style="width: 56px;" />
+          <col data-col="depth" style="width: 48px;" />
+          <col data-col="path" style="width: 260px;" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="check-col"><input id="selectAll" type="checkbox" title="Select all visible" /></th>
+            <th class="resizable" data-sort="name" data-col="name">Name<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="ext" data-col="ext">Ext<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="category" data-col="category" title="Derived from extension">Category<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="size" data-col="size">Size<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="mtime" data-col="mtime">Modified<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="age" data-col="age" title="Days since last modified">Age<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="depth" data-col="depth" title="Number of path segments">Depth<span class="col-resizer"></span></th>
+            <th class="resizable" data-sort="path" data-col="path">Path<span class="col-resizer"></span></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<script>
+const state = {
+  files: [],
+  filtered: [],
+  sortKey: 'size',
+  sortDir: -1,
+  activeScan: null,
+  // basket = local mirror of the Active plan's pending entries (set of srcPaths).
+  // Rebuilt from /api/plan/entries whenever the active plan changes.
+  basket: new Set(),
+  activePlanFile: localStorage.getItem('wn_active_plan') || 'working.plan.json',
+  activePlanHeader: null,
+  // pendingTrashMap: path → status ('trashed' | 'restored') across currently-selected scans.
+  // Survives reload via the per-scan sidecar.
+  pendingTrashMap: new Map(),
+  // Back-compat: pendingTrashSet still exists, contains all keys of the map.
+  pendingTrashSet: new Set(),
+  dupeGroups: new Map(),
+  volumes: [],
+  statView: 'files',
+  lastData: null,
+};
+
+function saveBasket() {
+  // No-op kept for source compatibility — the server is now the source of truth for the
+  // active plan's entries; the local Set is a cache. Calls to saveBasket() that aren't
+  // followed by syncBasketWithServer() will not persist.
+}
+
+// ===== Toast =====
+function toast(msg, kind) {
+  let stack = document.getElementById('toastStack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toastStack'; stack.className = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind === 'error' ? ' error' : '');
+  el.textContent = msg;
+  stack.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 200ms'; }, 3600);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ===== Active plan helpers =====
+async function fetchActivePlanEntries() {
+  try {
+    const r = await fetch(`/api/plan/entries?file=${encodeURIComponent(state.activePlanFile)}`).then(r => r.json());
+    return r.entries || [];
+  } catch { return []; }
+}
+async function refreshPlanFromServer() {
+  // Pull header + entries; rebuild local basket cache.
+  try {
+    const list = await fetch('/api/plans').then(r => r.json());
+    let header = (list.plans || []).find(p => p.file === state.activePlanFile)?.header;
+    if (!header && state.activePlanFile === 'working.plan.json') {
+      const r = await fetch('/api/plan/working').then(r => r.json());
+      header = r.plan;
+    }
+    state.activePlanHeader = header || null;
+  } catch {}
+  const entries = await fetchActivePlanEntries();
+  state.basket = new Set(entries.filter(e => e.status === 'pending' || e.status === 'copied').map(e => e.srcPath));
+  updatePlanUI();
+  if (typeof sortAndRender === 'function') sortAndRender();
+}
+async function addToActivePlan(records) {
+  // records: array of {srcPath,size,mtime,ext,name,driveName,srcVolumeUUID}
+  if (!records.length) { toast('Nothing to add.'); return; }
+  try {
+    const r = await fetch('/api/plan/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: state.activePlanFile, entries: records }),
+    }).then(r => r.json());
+    if (r.error) { toast('Add failed: ' + r.error, 'error'); return; }
+    toast(`Added ${(r.added||0).toLocaleString()} new · skipped ${(r.skipped||0).toLocaleString()} already in plan.`);
+    await refreshPlanFromServer();
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+async function removeFromActivePlan(srcPaths) {
+  try {
+    await fetch('/api/plan/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: state.activePlanFile, srcPaths }),
+    });
+    await refreshPlanFromServer();
+  } catch (e) { toast('Remove failed: ' + e.message, 'error'); }
+}
+// ===== File actions (reveal / trash) =====
+async function revealFile(p) {
+  try {
+    const r = await fetch('/api/file/reveal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p }),
+    }).then(r => r.json());
+    if (r.error === 'drive-not-mounted') {
+      toast(`Drive not connected: ${r.volume || ''}. Plug it in to show this file.`, 'error');
+      return;
+    }
+    if (r.error) toast('Reveal failed: ' + r.error, 'error');
+  } catch (e) { toast('Reveal failed: ' + e.message, 'error'); }
+}
+
+async function trashFiles(records) {
+  // records: [{path, scanFile}]
+  if (!records.length) return;
+  const n = records.length;
+  // Triple-prompt.
+  const sample = records.slice(0, 5).map(r => r.path).join('\n');
+  const more = records.length > 5 ? `\n…and ${records.length - 5} more` : '';
+  if (!confirm(`Send ${n} file(s) to Trash?\n\n${sample}${more}\n\nThis moves them to the Trash. They can be restored from there.`)) return;
+  if (!confirm(`Really? This cannot be undone from inside this app.\n\nThe files will be moved to the Trash. To free disk space you'll need to empty the Trash from Finder afterwards.`)) return;
+  // Group by scanFile so each pendingTrash sidecar updates correctly.
+  const byScan = new Map();
+  for (const r of records) {
+    if (!r.scanFile) continue;
+    if (!byScan.has(r.scanFile)) byScan.set(r.scanFile, []);
+    byScan.get(r.scanFile).push(r.path);
+  }
+  let trashed = 0; const errors = [];
+  for (const [scanFile, paths] of byScan) {
+    try {
+      const r = await fetch('/api/file/trash', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths, scanFile }),
+      }).then(r => r.json());
+      if (r.error) { errors.push(r.error); continue; }
+      trashed += (r.trashed || []).length;
+      for (const p of (r.trashed || [])) state.pendingTrashSet.add(p);
+      for (const e of (r.errors || [])) errors.push(`${e.path}: ${e.error}`);
+    } catch (e) { errors.push(e.message); }
+  }
+  const errSummary = errors.length ? `\n\n${errors.length} error(s):\n${errors.slice(0, 5).join('\n')}` : '';
+  // Third prompt: empty Trash + Update.
+  alert(`Moved ${trashed} file(s) to Trash.${errSummary}\n\nNext steps:\n1. Open Finder → empty the Trash to actually free disk space.\n2. Click "Update" next to this scan in the sidebar so the file list reflects what was really deleted.`);
+  // Re-render so strike-through appears.
+  sortAndRender();
+  // Refresh saved scans list so the per-scan Update button shows pending count.
+  loadScans();
+}
+
+function fileToEntryRecord(f) {
+  return {
+    srcPath: f.path,
+    size: f.size,
+    mtime: f.mtime,
+    ext: f.ext,
+    name: f.name,
+    driveName: f.driveName || null,
+    srcVolumeUUID: f.srcVolumeUUID || null,
+  };
+}
+
+const EXT_CATEGORY = (() => {
+  const map = {};
+  const add = (cat, exts) => exts.split(' ').forEach(e => map[e] = cat);
+  add('image', 'jpg jpeg png gif webp heic heif tiff tif bmp svg raw cr2 cr3 nef arw dng orf rw2 raf psd ai');
+  add('video', 'mp4 mov mkv avi wmv flv webm m4v mpg mpeg 3gp ts mts m2ts vob');
+  add('audio', 'mp3 wav flac aac m4a ogg opus wma aiff aif alac');
+  add('document', 'pdf doc docx odt rtf txt md pages key keynote ppt pptx xls xlsx csv tsv numbers epub mobi');
+  add('archive', 'zip rar 7z tar gz bz2 xz tgz tbz iso dmg pkg');
+  add('code', 'js ts jsx tsx py rb go rs c cpp h hpp java kt swift php html css scss less json yaml yml toml xml sh bash zsh sql lua r m mm vue svelte');
+  add('binary', 'app exe dll so dylib bin img iso dmg pkg deb rpm');
+  return map;
+})();
+function categoryOf(f) { return f._category || (f._category = EXT_CATEGORY[(f.ext || '').toLowerCase()] || 'other'); }
+function depthOf(f) {
+  if (f._depth !== undefined) return f._depth;
+  // Count path separators, excluding leading slash.
+  let n = 0;
+  for (let i = 1; i < f.path.length; i++) if (f.path.charCodeAt(i) === 47) n++;
+  return (f._depth = n);
+}
+// Prepare a freshly-loaded record once: pre-compute the fields every filter and sort
+// reads. Saves millions of string allocations per filter keystroke on large scans.
+function prepareFileRecord(rec, scanFile) {
+  if (scanFile) rec.__scanFile = scanFile;
+  rec._nameLower = (rec.name || '').toLowerCase();
+  rec._pathLower = (rec.path || '').toLowerCase();
+  rec._category = EXT_CATEGORY[(rec.ext || '').toLowerCase()] || 'other';
+  // Depth: count slashes in path (excluding leading).
+  let n = 0;
+  const p = rec.path || '';
+  for (let i = 1; i < p.length; i++) if (p.charCodeAt(i) === 47) n++;
+  rec._depth = n;
+  return rec;
+}
+function ageDaysOf(f, now) { return Math.max(0, Math.floor(((now || Date.now()) - f.mtime) / 86400000)); }
+function ageBucket(days) {
+  if (days <= 1) return 'day';
+  if (days <= 7) return 'week';
+  if (days <= 30) return 'month';
+  if (days <= 365) return 'year';
+  if (days <= 365 * 5) return 'old';
+  return 'ancient';
+}
+function fmtAge(days) {
+  if (days <= 1) return 'today';
+  if (days < 30) return days + 'd';
+  if (days < 365) return Math.round(days / 30) + 'mo';
+  return (days / 365).toFixed(days < 365 * 5 ? 1 : 0) + 'y';
+}
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  const u = ['KB','MB','GB','TB'];
+  let i = -1; let v = n;
+  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return v.toFixed(v < 10 ? 2 : 1) + ' ' + u[i];
+}
+function fmtDate(ms) {
+  const d = new Date(ms);
+  return d.toISOString().slice(0, 10) + ' ' + d.toTimeString().slice(0,5);
+}
+
+async function loadVolumes() {
+  const r = await fetch('/api/volumes').then(r => r.json());
+  state.volumes = r.volumes;
+  const el = document.getElementById('volumes');
+  el.innerHTML = '';
+  for (const v of r.volumes) {
+    const div = document.createElement('div');
+    div.className = 'vol';
+    div.innerHTML = `
+      <div style="flex:1; min-width:0;">
+        <div class="name">${escapeHtml(v.name)}</div>
+        <div class="path">${escapeHtml(v.path)}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:var(--muted);margin-top:6px;cursor:pointer;">
+          <input type="checkbox" class="skip-tm" checked /> Skip Time Machine backups
+        </label>
+      </div>
+      <button>Scan</button>
+    `;
+    const skipTm = div.querySelector('.skip-tm');
+    div.querySelector('button').addEventListener('click', e =>
+      scanVolume(e.target, v.path, { skipTimeMachine: skipTm.checked })
+    );
+    el.appendChild(div);
+  }
+  // Populate destination select on the Plan panel (skip "Root /").
+  const dest = document.getElementById('planDestSelect');
+  if (dest) {
+    const prev = dest.value;
+    const customSaved = state.activePlanHeader?.destination;
+    dest.innerHTML = '<option value="">Choose a destination…</option>' +
+      r.volumes.filter(v => v.path !== '/').map(v =>
+        `<option value="${escapeHtml(v.path)}">${escapeHtml(v.name)} — ${escapeHtml(v.path)}</option>`
+      ).join('');
+    // If the current plan's destination is a custom folder (not a top-level volume), add it.
+    if (customSaved && ![...dest.options].some(o => o.value === customSaved)) {
+      const opt = document.createElement('option');
+      opt.value = customSaved;
+      opt.textContent = '📂 ' + customSaved;
+      dest.appendChild(opt);
+    }
+    if (prev) dest.value = prev;
+    else if (customSaved) dest.value = customSaved;
+  }
+}
+
+let pollTimer = null;
+
+async function toggleScanPause() {
+  const btn = document.getElementById('scanPauseBtn');
+  if (!btn) return;
+  const isPaused = btn.textContent.trim() === 'Resume';
+  const endpoint = isPaused ? '/api/scan/resume' : '/api/scan/pause';
+  btn.disabled = true;
+  try {
+    const r = await fetch(endpoint, { method: 'POST' }).then(r => r.json());
+    if (r.error) alert(r.error);
+    else btn.textContent = r.paused ? 'Resume' : 'Pause';
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+  btn.disabled = false;
+}
+
+async function cancelScan() {
+  if (!confirm('Cancel the running scan? Files found so far will be kept.')) return;
+  const btn = document.getElementById('scanCancelBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…'; }
+  try {
+    const r = await fetch('/api/scan/cancel', { method: 'POST' }).then(r => r.json());
+    if (r.error) alert(r.error);
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+async function scanVolume(btn, p, opts = {}) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  const progressEl = document.getElementById('scanProgress');
+  progressEl.style.display = 'block';
+  progressEl.innerHTML = `
+    <strong>Scanning ${escapeHtml(p)}</strong>
+    <div class="progress-stats">Starting…</div>
+    <div class="progress-dir"></div>
+    <div class="scan-controls" style="margin-top:10px; display:flex; gap:8px;">
+      <button id="scanPauseBtn" class="ghost-btn">Pause</button>
+      <button id="scanCancelBtn" class="ghost-btn" style="border-color: var(--danger); color: var(--danger);">Cancel</button>
+    </div>
+  `;
+  document.getElementById('scanPauseBtn').addEventListener('click', toggleScanPause);
+  document.getElementById('scanCancelBtn').addEventListener('click', cancelScan);
+
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  state.activeScan = null;
+  state.errorsFor = null;
+  state.errorsList = null;
+  state.errorsPage = 0;
+  state.errorsShowAll = false;
+  state.files = [];
+  state.filtered = [];
+  document.getElementById('fExt').innerHTML = '';
+  document.getElementById('stats').innerHTML = '';
+  document.getElementById('rows').innerHTML = '';
+  document.getElementById('count').textContent = '0 files';
+
+  let started;
+  try {
+    started = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p, skipTimeMachine: opts.skipTimeMachine !== false }),
+    }).then(r => r.json());
+  } catch (e) {
+    btn.disabled = false; btn.textContent = original;
+    progressEl.querySelector('.progress-stats').textContent = 'Failed to start scan.';
+    return;
+  }
+  if (started.error) {
+    btn.disabled = false; btn.textContent = original;
+    progressEl.querySelector('.progress-stats').textContent = 'Error: ' + started.error;
+    return;
+  }
+
+  state.activeScan = started.file;
+  const statsEl = progressEl.querySelector('.progress-stats');
+  const dirEl = progressEl.querySelector('.progress-dir');
+
+  let pollErrors = 0;
+  let ndjsonBytesRead = 0;
+  let ndjsonLeftover = '';
+  state.files = [];
+
+  async function fetchNewNdjson() {
+    if (!started.ndjson) return;
+    const r = await fetch('/scans/' + encodeURIComponent(started.ndjson), {
+      cache: 'no-store',
+      headers: { 'Range': `bytes=${ndjsonBytesRead}-` },
+    });
+    if (!r.ok && r.status !== 206 && r.status !== 200) return;
+    const chunk = await r.text();
+    if (!chunk) return;
+    ndjsonBytesRead += new TextEncoder().encode(chunk).length;
+    const text = ndjsonLeftover + chunk;
+    let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) {
+        const line = text.slice(start, i);
+        start = i + 1;
+        if (line) { try { state.files.push(prepareFileRecord(JSON.parse(line))); } catch {} }
+      }
+    }
+    ndjsonLeftover = text.slice(start);
+  }
+
+  async function pollOnce() {
+    try {
+      const r = await fetch('/scans/' + encodeURIComponent(started.file) + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      pollErrors = 0;
+      const pausedTag = data.paused ? ' · ⏸ PAUSED' : '';
+      statsEl.textContent = `${(data.fileCount||0).toLocaleString()} files · ${(data.dirCount||0).toLocaleString()} dirs · ${((data.durationMs||0)/1000).toFixed(1)}s${pausedTag}`;
+      dirEl.textContent = data.currentDir || '';
+      // Sync pause button label with server-reported state.
+      const pauseBtn = document.getElementById('scanPauseBtn');
+      if (pauseBtn) pauseBtn.textContent = data.paused ? 'Resume' : 'Pause';
+      await fetchNewNdjson();
+      populateExtFilter();
+      populateTopFolderFilter();
+      applyFilters();
+      renderStats(data);
+      if (data.done) {
+        clearInterval(pollTimer); pollTimer = null;
+        btn.disabled = false; btn.textContent = original;
+        progressEl.style.display = 'none';
+        // final flush of any tail
+        await fetchNewNdjson();
+        populateExtFilter();
+        populateTopFolderFilter();
+        applyFilters();
+        renderStats(data);
+        await loadScans();
+      }
+    } catch (e) {
+      pollErrors++;
+      if (pollErrors >= 3) {
+        statsEl.textContent = 'Poll error (' + pollErrors + '×): ' + e.message;
+      }
+    }
+  }
+  pollTimer = setInterval(pollOnce, 1000);
+  pollOnce();
+}
+
+async function loadScans() {
+  const r = await fetch('/api/scans').then(r => r.json());
+  const el = document.getElementById('scansList');
+  el.innerHTML = '';
+  if (!r.scans.length) {
+    el.innerHTML = '<div style="color:var(--muted); font-size:0.85rem;">No scans yet. Click "Scan" on a volume above.</div>';
+    return;
+  }
+  state.savedScans = r.scans;
+  if (!state.selectedScans) state.selectedScans = new Set();
+  // Persisted selection across reloads
+  try {
+    const saved = JSON.parse(localStorage.getItem('wn_selected_scans') || '[]');
+    if (state.selectedScans.size === 0) state.selectedScans = new Set(saved.filter(f => r.scans.some(s => s.file === f)));
+  } catch {}
+  for (const s of r.scans) {
+    const div = document.createElement('div');
+    const checked = state.selectedScans.has(s.file);
+    div.className = 'scan-item' + (checked ? ' active' : '');
+    div.innerHTML = `
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer; flex:1; min-width:0;">
+          <input type="checkbox" class="scan-check" ${checked ? 'checked' : ''} />
+          <div style="flex:1; min-width:0;">
+            <div class="root">${escapeHtml(s.file)}</div>
+            <div class="meta">${fmtSize(s.size)} · ${fmtDate(s.mtime)}</div>
+            <div class="scan-pending-trash" data-pt-count="" style="margin-top:4px;"></div>
+          </div>
+        </label>
+        <div style="display:flex; flex-direction:column; gap:4px; align-self:center;">
+          <button class="scan-update" title="Re-check files queued for Trash and prune the scan if they've been emptied"
+            style="background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:2px 8px; cursor:pointer; font-size:0.78rem;">↻</button>
+          <button class="scan-del" title="Delete this scan"
+            style="background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:2px 8px; cursor:pointer; font-size:0.78rem;">✕</button>
+        </div>
+      </div>
+    `;
+    const cb = div.querySelector('.scan-check');
+    cb.addEventListener('change', async () => {
+      if (cb.checked) state.selectedScans.add(s.file);
+      else state.selectedScans.delete(s.file);
+      localStorage.setItem('wn_selected_scans', JSON.stringify([...state.selectedScans]));
+      await loadSelectedScans();
+      loadScans();
+    });
+    // Render pending-trash hint + wire Update button.
+    (async () => {
+      try {
+        const pt = await fetch(`/api/scan/pending-trash?file=${encodeURIComponent(s.file)}`).then(r => r.json());
+        const queued = (pt.entries || []).filter(e => e.status === 'trashed').length;
+        const restored = (pt.entries || []).filter(e => e.status === 'restored').length;
+        const hint = div.querySelector('.scan-pending-trash');
+        if (queued || restored) {
+          hint.innerHTML = `<span style="color:var(--danger); font-size:0.72rem;">
+            ${queued ? queued + ' trashed' : ''}${queued && restored ? ' · ' : ''}${restored ? restored + ' restored' : ''}
+          </span>`;
+        }
+      } catch {}
+    })();
+    const upBtn = div.querySelector('.scan-update');
+    upBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!confirm(`Update this scan?\n\nThis re-checks every file you sent to Trash. Files actually deleted (Trash emptied) are removed from the scan. Files restored from Trash stay.\n\nNo new files are scanned — for that, run a fresh scan on the volume.`)) return;
+      upBtn.disabled = true;
+      upBtn.textContent = '…';
+      try {
+        const r = await fetch('/api/scan/update', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scanFile: s.file }),
+        }).then(r => r.json());
+        if (r.error) { toast('Update failed: ' + r.error, 'error'); upBtn.disabled = false; upBtn.textContent = '↻'; return; }
+        toast(`Scan updated: ${r.removed||0} removed · ${r.restored||0} restored · ${r.stillPending||0} still pending.`);
+        // Reload the scan data if it's selected so the UI reflects the prune.
+        if (state.selectedScans && state.selectedScans.has(s.file)) await loadSelectedScans();
+        loadScans();
+      } catch (err) {
+        toast('Update failed: ' + err.message, 'error');
+        upBtn.disabled = false; upBtn.textContent = '↻';
+      }
+    });
+    const delBtn = div.querySelector('.scan-del');
+    delBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!confirm(`Delete this scan?\n\n${s.file}\n\nThis removes the header, file list, and error log. The scanned disk is NOT touched. This cannot be undone.`)) return;
+      delBtn.disabled = true;
+      try {
+        const r = await fetch('/api/scans/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file: s.file }),
+        }).then(r => r.json());
+        if (r.error) { alert('Delete failed: ' + r.error); delBtn.disabled = false; return; }
+        // Drop selection if we deleted a selected scan.
+        if (state.selectedScans.has(s.file)) {
+          state.selectedScans.delete(s.file);
+          localStorage.setItem('wn_selected_scans', JSON.stringify([...state.selectedScans]));
+          await loadSelectedScans();
+        }
+        loadScans();
+      } catch (err) {
+        alert('Delete failed: ' + err.message);
+        delBtn.disabled = false;
+      }
+    });
+    el.appendChild(div);
+  }
+}
+
+async function loadSelectedScans() {
+  state.files = [];
+  state.lastData = null;
+  state.pendingTrashSet = new Set();
+  state.pendingTrashMap = new Map();
+  let totalBytes = 0, fileCount = 0, dirCount = 0, errorCount = 0, durationMs = 0;
+  const roots = [];
+  const errorFiles = [];
+  const errorsSample = [];
+  for (const file of state.selectedScans) {
+    try {
+      const data = await fetch('/scans/' + encodeURIComponent(file), { cache: 'no-store' }).then(r => r.json());
+      await loadNdjsonAppend(data.ndjson, file);
+      // Load pendingTrash sidecar for this scan; tag each file so trash actions know
+      // which scan to write back to.
+      try {
+        const pt = await fetch(`/api/scan/pending-trash?file=${encodeURIComponent(file)}`).then(r => r.json());
+        for (const e of (pt.entries || [])) {
+          if (e.status === 'deleted') continue;
+          state.pendingTrashMap.set(e.path, e.status || 'trashed');
+          state.pendingTrashSet.add(e.path);
+        }
+      } catch {}
+      totalBytes += data.totalBytes || 0;
+      fileCount += data.fileCount || 0;
+      dirCount += data.dirCount || 0;
+      errorCount += data.errorCount || 0;
+      durationMs += data.durationMs || 0;
+      if (data.root) roots.push(data.root);
+      if (data.errors) errorFiles.push(data.errors);
+      if (Array.isArray(data.errorsSample)) errorsSample.push(...data.errorsSample);
+    } catch {}
+  }
+  state.lastData = {
+    root: roots.length === 1 ? roots[0] : `${roots.length} scan(s) selected`,
+    fileCount, dirCount, totalBytes, durationMs, errorCount,
+    errors: errorFiles.length ? errorFiles.join('|') : null,
+    errorFiles,
+    errorsSample,
+    done: true,
+  };
+  state.errorsFor = null;
+  state.errorsList = null;
+  populateExtFilter();
+  populateTopFolderFilter();
+  applyFilters();
+  renderStats(state.lastData);
+}
+
+async function loadNdjsonAppend(ndjsonName, scanFile) {
+  if (!ndjsonName) return;
+  const r = await fetch('/scans/' + encodeURIComponent(ndjsonName), { cache: 'no-store' });
+  if (!r.ok) return;
+  const text = await r.text();
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) {
+      const line = text.slice(start, i);
+      start = i + 1;
+      if (line) {
+        try {
+          state.files.push(prepareFileRecord(JSON.parse(line), scanFile));
+        } catch {}
+      }
+    }
+  }
+}
+
+async function loadNdjson(ndjsonName) {
+  if (!ndjsonName) { state.files = []; return; }
+  const r = await fetch('/scans/' + encodeURIComponent(ndjsonName), { cache: 'no-store' });
+  if (!r.ok) { state.files = []; return; }
+  const text = await r.text();
+  const files = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) {
+      const line = text.slice(start, i);
+      start = i + 1;
+      if (line) {
+        try { files.push(JSON.parse(line)); } catch {}
+      }
+    }
+  }
+  state.files = files;
+}
+
+function populateExtFilter() {
+  // If the Category filter is active, restrict ext counts to files in those categories,
+  // so picking "image" surfaces only image extensions (jpg, png, heic…) for deeper filtering.
+  const catSel = new Set(
+    [...(document.getElementById('fCategory')?.selectedOptions || [])].map(o => o.value)
+  );
+  const exts = new Map();
+  for (const f of state.files) {
+    if (catSel.size && !catSel.has(categoryOf(f))) continue;
+    const k = f.ext || '(none)';
+    exts.set(k, (exts.get(k) || 0) + 1);
+  }
+  const sorted = [...exts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 200);
+  const sel = document.getElementById('fExt');
+  const prevSelected = new Set([...sel.selectedOptions].map(o => o.value));
+  // Keep any previously-selected ext even if it's not present in the new (possibly filtered)
+  // dataset, so the user's existing ext filter survives a Category change.
+  const present = new Set(sorted.map(([e]) => e));
+  const extras = [...prevSelected].filter(e => !present.has(e)).map(e => [e, 0]);
+  const all = [...extras, ...sorted];
+  sel.innerHTML = all.map(([e, n]) =>
+    `<option value="${escapeHtml(e)}" ${prevSelected.has(e) ? 'selected' : ''}>${escapeHtml(e)}${n ? ` (${n})` : ' (0)'}</option>`
+  ).join('');
+  // Auto-size to roughly the number of options so a narrowed list is fully visible.
+  sel.size = Math.max(4, Math.min(12, all.length));
+}
+
+function populateTopFolderFilter() {
+  const root = state.files[0] ? state.files[0].path : '';
+  const rootSeg = root ? root.split('/').slice(0, root.startsWith('/Volumes/') ? 3 : 3).join('/') : '';
+  const folders = new Map();
+  for (const f of state.files) {
+    const rel = f.path.split('/');
+    const seg = rel.length > 3 ? rel.slice(0, 4).join('/') : f.path;
+    folders.set(seg, (folders.get(seg) || 0) + 1);
+  }
+  const sorted = [...folders.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100);
+  const sel = document.getElementById('fTopFolder');
+  const prev = sel.value;
+  // Keep prior selection even if absent from the new dataset.
+  const present = new Set(sorted.map(([p]) => p));
+  const prefix = prev && !present.has(prev)
+    ? `<option value="${escapeHtml(prev)}" selected>${escapeHtml(prev)} (0)</option>`
+    : '';
+  sel.innerHTML = '<option value="">Any</option>' + prefix +
+    sorted.map(([p, n]) => `<option value="${escapeHtml(p)}">${escapeHtml(p)} (${n})</option>`).join('');
+  if (prev) sel.value = prev;
+}
+
+function renderStats(data) {
+  const totalSize = (typeof data.totalBytes === 'number')
+    ? data.totalBytes
+    : state.files.reduce((s, f) => s + f.size, 0);
+  const view = state.statView || 'files';
+  state.lastData = data;
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="label">Root</div><div class="value" style="font-size:0.95rem; word-break:break-all;">${escapeHtml(data.root || '')}</div></div>
+    <div class="stat stat-clickable ${view==='files'?'stat-active':''}" data-view="files"><div class="label">Files</div><div class="value">${(data.fileCount||0).toLocaleString()}</div></div>
+    <div class="stat"><div class="label">Total size</div><div class="value">${fmtSize(totalSize)}</div></div>
+    <div class="stat"><div class="label">Scan time</div><div class="value">${((data.durationMs||0)/1000).toFixed(1)}s</div></div>
+    ${data.errorCount ? `<div class="stat stat-clickable ${view==='errors'?'stat-active':''}" data-view="errors" style="border-color:var(--danger);"><div class="label">Errors</div><div class="value">${data.errorCount.toLocaleString()}</div></div>` : ''}
+  `;
+  // Wire click handlers (use state.lastData so we always read the freshest header).
+  document.querySelectorAll('.stat-clickable').forEach(el => {
+    el.addEventListener('click', () => {
+      state.statView = el.dataset.view;
+      renderStats(state.lastData);
+    });
+  });
+  updatePanels();
+}
+
+function updatePanels() {
+  const view = state.statView || 'files';
+  // In errors view, hide the Files panel so the errors box (inside Status) is the focus.
+  const filesPanel = document.querySelector('.panel[data-panel="files"]');
+  if (filesPanel) filesPanel.style.display = view === 'files' ? '' : 'none';
+  // Basket only relevant in files view AND when non-empty.
+  const basketPanel = document.getElementById('basketPanel');
+  if (basketPanel) basketPanel.style.display =
+    (view === 'files' && state.basket.size > 0) ? '' : 'none';
+  renderErrorsPanel();
+}
+
+async function renderErrorsPanel() {
+  const box = document.getElementById('errorsBox');
+  const data = state.lastData;
+  const view = state.statView || 'files';
+  if (view !== 'errors' || !data || !data.errorCount) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+
+  // Cache key: which scan(s) these errors are for. Use errors filename(s) if present,
+  // otherwise the root path so the cache is still keyed per-scan.
+  const cacheKey = data.errors || data.root || 'sample';
+  if (state.errorsFor !== cacheKey || !Array.isArray(state.errorsList)) {
+    box.innerHTML = `<h3>Scan errors — possible missing files</h3><div style="color:var(--muted);font-size:0.85rem;">Loading…</div>`;
+    const combined = [];
+    const errorFiles = Array.isArray(data.errorFiles) && data.errorFiles.length
+      ? data.errorFiles
+      : (data.errors ? [data.errors] : []);
+    for (const ef of errorFiles) {
+      try {
+        const r = await fetch('/scans/' + encodeURIComponent(ef), { cache: 'no-store' });
+        if (!r.ok) continue;
+        const text = await r.text();
+        const lines = text.split('\n').filter(l => l);
+        for (const l of lines) {
+          try { combined.push(JSON.parse(l)); } catch {}
+        }
+      } catch {}
+    }
+    // Fallback to errorsSample from the header (always present when errorCount > 0).
+    if (combined.length === 0 && Array.isArray(data.errorsSample) && data.errorsSample.length) {
+      combined.push(...data.errorsSample);
+    }
+    state.errorsList = combined;
+    state.errorsFor = cacheKey;
+    state.errorsPage = 0;
+    state.errorsPageSize = 50;
+    state.errorsShowAll = false;
+  }
+
+  const truncatedSample = state.errorsList.length < (data.errorCount || 0);
+
+  const total = state.errorsList.length;
+  const page = state.errorsPage || 0;
+  const pageSize = state.errorsPageSize || 50;
+  let slice, info;
+  if (state.errorsShowAll) {
+    slice = state.errorsList;
+    info = `Showing all ${total.toLocaleString()} errors.`;
+  } else {
+    const start = page * pageSize;
+    slice = state.errorsList.slice(start, start + pageSize);
+    info = `Showing ${start+1}–${Math.min(start+pageSize, total)} of ${total.toLocaleString()}.`;
+  }
+
+  const truncatedNote = truncatedSample
+    ? `<div style="margin-bottom:8px; padding:8px 10px; border-radius:6px; background: oklch(28% 0.04 60 / 0.4); color: var(--text); font-size:0.8rem;">⚠ This scan recorded ${data.errorCount.toLocaleString()} errors but only ${total.toLocaleString()} are available here (the per-error log was not written, likely because the scan was interrupted). Re-run the scan to capture all error details.</div>`
+    : '';
+  box.innerHTML = `
+    <h3>Scan errors — possible missing files</h3>
+    ${truncatedNote}
+    <div style="margin-bottom:8px; color:var(--muted); font-size:0.8rem;">${info} Common cause: permission denied. Try the scan again, granting Terminal "Full Disk Access" in System Settings → Privacy & Security.</div>
+    <div class="err-pager">
+      <button class="ghost-btn" id="errPrev" ${state.errorsShowAll || page === 0 ? 'disabled' : ''}>← Prev 50</button>
+      <button class="ghost-btn" id="errNext" ${state.errorsShowAll || (page+1)*pageSize >= total ? 'disabled' : ''}>Next 50 →</button>
+      <button class="ghost-btn" id="errAll">${state.errorsShowAll ? 'Paged view' : 'Show all'}</button>
+    </div>
+    <div class="err-list">
+      ${slice.length ? slice.map(e => `<div class="err-row"><code>${escapeHtml(e.error||'?')}</code>${escapeHtml(e.path||'')}</div>`).join('') : '<div style="color:var(--muted); font-size:0.85rem; padding:8px 0;">No error details available. Re-run the scan to capture them.</div>'}
+    </div>
+  `;
+  document.getElementById('errPrev').addEventListener('click', () => {
+    state.errorsPage = Math.max(0, (state.errorsPage||0) - 1); renderErrorsPanel();
+  });
+  document.getElementById('errNext').addEventListener('click', () => {
+    state.errorsPage = (state.errorsPage||0) + 1; renderErrorsPanel();
+  });
+  document.getElementById('errAll').addEventListener('click', () => {
+    state.errorsShowAll = !state.errorsShowAll; renderErrorsPanel();
+  });
+}
+
+function parseSize(s) {
+  if (!s) return 0;
+  const m = String(s).trim().match(/^([\d.]+)\s*([kmgt]?b)?$/i);
+  if (!m) return +s || 0;
+  const n = parseFloat(m[1]);
+  const u = (m[2] || '').toLowerCase();
+  const mult = { '': 1, b: 1, kb: 1024, mb: 1024**2, gb: 1024**3, tb: 1024**4 }[u] || 1;
+  return Math.round(n * mult);
+}
+
+function computeDupes() {
+  // size + name + ext key
+  const map = new Map();
+  for (const f of state.files) {
+    const key = `${f.size}::${f.name}::${f.ext}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(f);
+  }
+  const dupes = new Map();
+  for (const [k, list] of map) {
+    if (list.length > 1) dupes.set(k, list);
+  }
+  state.dupeGroups = dupes;
+  return dupes;
+}
+
+function applyFilters() {
+  const fName = document.getElementById('fName').value.toLowerCase();
+  const fPath = document.getElementById('fPath').value.toLowerCase();
+  const fTop = document.getElementById('fTopFolder').value;
+  const fExtSel = [...document.getElementById('fExt').selectedOptions].map(o => o.value);
+  const fMin = parseSize(document.getElementById('fMinSize').value);
+  const fMax = parseSize(document.getElementById('fMaxSize').value) || Infinity;
+  const fAfter = document.getElementById('fAfter').value
+    ? new Date(document.getElementById('fAfter').value).getTime() : 0;
+  const fBefore = document.getElementById('fBefore').value
+    ? new Date(document.getElementById('fBefore').value).getTime() + 86400000 : Infinity;
+  const fAge = document.getElementById('fAge').value;
+  const fCatSel = [...document.getElementById('fCategory').selectedOptions].map(o => o.value);
+  const fMinDepth = parseInt(document.getElementById('fMinDepth').value, 10);
+  const fMaxDepth = parseInt(document.getElementById('fMaxDepth').value, 10);
+  const minDepth = isFinite(fMinDepth) ? fMinDepth : 0;
+  const maxDepth = isFinite(fMaxDepth) ? fMaxDepth : Infinity;
+  const now = Date.now();
+  const onlyDupes = document.getElementById('fDuplicates').checked;
+  const hideDupes = document.getElementById('fHideDupes').checked;
+
+  let dupeSet = null;
+  let hiddenSet = null;
+  if (onlyDupes || hideDupes) {
+    computeDupes();
+    if (onlyDupes) {
+      dupeSet = new Set();
+      for (const list of state.dupeGroups.values()) for (const f of list) dupeSet.add(f.path);
+    }
+    if (hideDupes) {
+      // Keep shortest path in each group; hide the rest
+      hiddenSet = new Set();
+      for (const list of state.dupeGroups.values()) {
+        const sorted = [...list].sort((a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path));
+        for (let i = 1; i < sorted.length; i++) hiddenSet.add(sorted[i].path);
+      }
+    }
+  } else {
+    state.dupeGroups = new Map();
+  }
+
+  // Hot loop: uses pre-computed cached fields (_nameLower, _pathLower, _category, _depth)
+  // so per-keystroke filtering doesn't allocate millions of strings.
+  const fExtSetForLookup = fExtSel.length ? new Set(fExtSel) : null;
+  const fCatSetForLookup = fCatSel.length ? new Set(fCatSel) : null;
+  const hasDepthFilter = minDepth || maxDepth !== Infinity;
+  const N = state.files.length;
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    const f = state.files[i];
+    if (fName && (f._nameLower || (f._nameLower = (f.name || '').toLowerCase())).indexOf(fName) === -1) continue;
+    if (fPath && (f._pathLower || (f._pathLower = (f.path || '').toLowerCase())).indexOf(fPath) === -1) continue;
+    if (fTop && !f.path.startsWith(fTop)) continue;
+    if (fExtSetForLookup && !fExtSetForLookup.has(f.ext || '(none)')) continue;
+    if (f.size < fMin || f.size > fMax) continue;
+    if (f.mtime < fAfter || f.mtime > fBefore) continue;
+    if (fCatSetForLookup) {
+      const c = f._category || (f._category = EXT_CATEGORY[(f.ext || '').toLowerCase()] || 'other');
+      if (!fCatSetForLookup.has(c)) continue;
+    }
+    if (fAge) {
+      const days = Math.max(0, Math.floor((now - f.mtime) / 86400000));
+      if (ageBucket(days) !== fAge) continue;
+    }
+    if (hasDepthFilter) {
+      const d = f._depth !== undefined ? f._depth : depthOf(f);
+      if (d < minDepth || d > maxDepth) continue;
+    }
+    if (dupeSet && !dupeSet.has(f.path)) continue;
+    if (hiddenSet && hiddenSet.has(f.path)) continue;
+    out.push(f);
+  }
+  state.filtered = out;
+  sortAndRender();
+}
+
+const DUPE_CLASSES = ['dupe-group-a','dupe-group-b','dupe-group-c','dupe-group-d','dupe-group-e','dupe-group-f'];
+
+function sortAndRender() {
+  // Defensive: reapply persisted column widths in case anything wiped them.
+  if (typeof applySavedColumnWidths === 'function') applySavedColumnWidths();
+  const k = state.sortKey, d = state.sortDir;
+  // Derived sort keys: category, age (= -mtime really, but sort by days), depth.
+  const getKey = k === 'category' ? categoryOf
+    : k === 'depth' ? depthOf
+    : k === 'age' ? (f => f.mtime)  // older = smaller mtime, so ascending mtime = oldest first
+    : (f => f[k]);
+  state.filtered.sort((a, b) => {
+    const av = getKey(a), bv = getKey(b);
+    if (av < bv) return -1 * d;
+    if (av > bv) return 1 * d;
+    return 0;
+  });
+  const rows = state.filtered.slice(0, 2000);
+  document.getElementById('count').textContent =
+    `${state.filtered.length.toLocaleString()} files${state.filtered.length > 2000 ? ' (showing first 2000)' : ''}`;
+  const tbody = document.getElementById('rows');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No files match.</td></tr>';
+    updateBasketUI();
+    scheduleBreakdown();
+    return;
+  }
+  const now = Date.now();
+  // Build a key→class map for visible dupe rows
+  const groupKeyOrder = new Map();
+  if (state.dupeGroups.size) {
+    let i = 0;
+    for (const k of state.dupeGroups.keys()) { groupKeyOrder.set(k, DUPE_CLASSES[i % DUPE_CLASSES.length]); i++; }
+  }
+  tbody.innerHTML = rows.map(f => {
+    const key = `${f.size}::${f.name}::${f.ext}`;
+    const trashStatus = state.pendingTrashMap.get(f.path); // 'trashed' | 'restored' | undefined
+    const cls = [groupKeyOrder.get(key) || '', trashStatus === 'trashed' ? 'trashed' : ''].filter(Boolean).join(' ');
+    const checked = state.basket.has(f.path) ? 'checked' : '';
+    const days = ageDaysOf(f, now);
+    const trashBadge = trashStatus === 'trashed' ? '<span class="trash-badge">trashed</span>'
+      : trashStatus === 'restored' ? '<span class="trash-badge restored-badge">↩ restored</span>'
+      : '';
+    return `<tr class="${cls}" data-path="${escapeHtml(f.path)}" data-scan="${escapeHtml(f.__scanFile || '')}" title="Double-click to reveal in Finder">
+      <td class="check-col"><input type="checkbox" class="row-check" ${checked} /></td>
+      <td title="${escapeHtml(f.name)}">${escapeHtml(f.name)}${trashBadge}</td>
+      <td class="ext">${escapeHtml(f.ext || '')}</td>
+      <td>${categoryOf(f)}</td>
+      <td class="size">${fmtSize(f.size)}</td>
+      <td>${fmtDate(f.mtime)}</td>
+      <td title="${days} days">${fmtAge(days)}</td>
+      <td>${depthOf(f)}</td>
+      <td class="path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</td>
+    </tr>`;
+  }).join('');
+  // Row checkboxes are a multi-select staging area. They do NOT mutate the active plan;
+  // user explicitly hits "Add checked" to commit them. Counter updates live.
+  tbody.querySelectorAll('.row-check').forEach(cb => {
+    cb.addEventListener('change', updateAddButtonLabels);
+  });
+  // Double-click a row to reveal in Finder.
+  tbody.querySelectorAll('tr[data-path]').forEach(tr => {
+    tr.addEventListener('dblclick', e => {
+      if (e.target.tagName === 'INPUT') return;
+      revealFile(tr.dataset.path);
+    });
+  });
+  updateBasketUI();
+  scheduleBreakdown();
+}
+
+// Defer breakdown until after the table paints. Skip entirely if the panel is collapsed.
+let _breakdownRaf = null;
+function scheduleBreakdown() {
+  if (_breakdownRaf) cancelAnimationFrame(_breakdownRaf);
+  const panel = document.querySelector('.panel[data-panel="breakdown"]');
+  if (panel && panel.classList.contains('collapsed')) return;
+  _breakdownRaf = requestAnimationFrame(() => {
+    _breakdownRaf = null;
+    renderBreakdown();
+  });
+}
+
+function renderBreakdown() {
+  const body = document.getElementById('breakdownBody');
+  if (!body) return;
+  const files = state.filtered;
+  if (!files.length) {
+    body.innerHTML = '<div style="color:var(--muted); font-size:0.85rem;">No files match the current filters.</div>';
+    return;
+  }
+
+  const now = Date.now();
+  let totalBytes = 0;
+  const byCat = new Map();
+  const byAge = new Map();
+  const byExt = new Map();
+  const byTopFolder = new Map();
+
+  for (const f of files) {
+    totalBytes += f.size;
+    const cat = categoryOf(f);
+    const c = byCat.get(cat) || { n: 0, b: 0 }; c.n++; c.b += f.size; byCat.set(cat, c);
+    const a = ageBucket(ageDaysOf(f, now));
+    const ag = byAge.get(a) || { n: 0, b: 0 }; ag.n++; ag.b += f.size; byAge.set(a, ag);
+    const ext = f.ext || '(none)';
+    const ex = byExt.get(ext) || { n: 0, b: 0 }; ex.n++; ex.b += f.size; byExt.set(ext, ex);
+    const segs = f.path.split('/');
+    const folder = segs.length > 4 ? segs.slice(0, 4).join('/') : f.path;
+    const tf = byTopFolder.get(folder) || { n: 0, b: 0 }; tf.n++; tf.b += f.size; byTopFolder.set(folder, tf);
+  }
+
+  // Top 10 largest files via partial scan — O(N) with a 10-element scratch, no full sort,
+  // no array clone of potentially millions of records.
+  const K = 10;
+  const largest = [];
+  for (const f of files) {
+    if (largest.length < K) {
+      largest.push(f);
+      if (largest.length === K) largest.sort((a, b) => a.size - b.size); // ascending; min at [0]
+    } else if (f.size > largest[0].size) {
+      largest[0] = f;
+      let i = 0;
+      while (i + 1 < K && largest[i].size > largest[i + 1].size) {
+        const t = largest[i]; largest[i] = largest[i + 1]; largest[i + 1] = t;
+        i++;
+      }
+    }
+  }
+  largest.sort((a, b) => b.size - a.size); // final descending order for display
+
+  // Duplicate waste: compute over filtered set, sum bytes beyond the first copy in each group.
+  const dupeMap = new Map();
+  for (const f of files) {
+    const key = `${f.size}::${f.name}::${f.ext}`;
+    const list = dupeMap.get(key); if (list) list.push(f); else dupeMap.set(key, [f]);
+  }
+  let dupeWasteBytes = 0, dupeWasteCount = 0;
+  for (const list of dupeMap.values()) {
+    if (list.length > 1) {
+      for (let i = 1; i < list.length; i++) { dupeWasteBytes += list[i].size; dupeWasteCount++; }
+    }
+  }
+
+  const AGE_ORDER = ['day','week','month','year','old','ancient'];
+  const AGE_LABEL = {
+    day: '≤ 1 day', week: '≤ 1 week', month: '≤ 1 month',
+    year: '≤ 1 year', old: '> 1 year', ancient: '> 5 years',
+  };
+  const CAT_LABEL = {
+    image:'Image', video:'Video', audio:'Audio', document:'Document',
+    archive:'Archive', code:'Code', binary:'Binary', other:'Other',
+  };
+
+  function bar(entries, total, alt) {
+    return entries.map(([label, v]) => {
+      const pct = total ? (v.b / total) * 100 : 0;
+      return `
+        <div class="bd-row">
+          <div class="bd-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+          <div class="bd-val">${v.n.toLocaleString()} · ${fmtSize(v.b)} · ${pct.toFixed(1)}%</div>
+          <div class="bd-bar"><div class="bd-fill ${alt ? 'alt' : ''}" style="width:${pct.toFixed(2)}%"></div></div>
+        </div>`;
+    }).join('');
+  }
+
+  const catRows = [...byCat.entries()]
+    .map(([k, v]) => [CAT_LABEL[k] || k, v])
+    .sort((a, b) => b[1].b - a[1].b);
+  const ageRows = AGE_ORDER
+    .filter(k => byAge.has(k))
+    .map(k => [AGE_LABEL[k], byAge.get(k)]);
+  const extRows = [...byExt.entries()]
+    .sort((a, b) => b[1].b - a[1].b).slice(0, 8);
+  const folderRows = [...byTopFolder.entries()]
+    .sort((a, b) => b[1].b - a[1].b).slice(0, 8);
+
+  body.innerHTML = `
+    <div class="bd-summary">
+      <div><div class="label">Files</div><strong>${files.length.toLocaleString()}</strong></div>
+      <div><div class="label">Total size</div><strong>${fmtSize(totalBytes)}</strong></div>
+      <div><div class="label">Avg size</div><strong>${fmtSize(Math.round(totalBytes / files.length))}</strong></div>
+      ${dupeWasteCount ? `<div><div class="label">Duplicate waste</div><strong style="color: var(--accent-2)">${fmtSize(dupeWasteBytes)}</strong> <span style="color:var(--muted)">(${dupeWasteCount.toLocaleString()} extras)</span></div>` : ''}
+    </div>
+    <div class="bd-grid">
+      <div class="bd-card">
+        <h4>By Category</h4>
+        ${bar(catRows, totalBytes, false)}
+      </div>
+      <div class="bd-card">
+        <h4>By Age (modified)</h4>
+        ${bar(ageRows, totalBytes, true)}
+      </div>
+      <div class="bd-card">
+        <h4>Top Extensions by size</h4>
+        ${bar(extRows, totalBytes, false)}
+      </div>
+      <div class="bd-card">
+        <h4>Top Folders by size</h4>
+        ${bar(folderRows, totalBytes, true)}
+      </div>
+      <div class="bd-card" style="grid-column: span 2;">
+        <h4>Largest individual files (click to add to plan · double-click to reveal · 🗑 to Trash)</h4>
+        ${largest.map(f => {
+          const tstatus = state.pendingTrashMap.get(f.path);
+          const isTrashed = tstatus === 'trashed';
+          const isRestored = tstatus === 'restored';
+          const badge = isTrashed ? '<span class="trash-badge">trashed</span>'
+            : isRestored ? '<span class="trash-badge restored-badge">↩ restored</span>' : '';
+          return `
+          <div class="bd-largest-row ${isTrashed ? 'trashed' : ''}"
+               data-add-path="${escapeHtml(f.path)}" data-scan="${escapeHtml(f.__scanFile || '')}"
+               style="${isTrashed ? 'text-decoration: line-through; opacity: 0.6;' : ''}">
+            <div style="min-width:0;">
+              <div class="bd-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}${badge}</div>
+              <div class="bd-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</div>
+            </div>
+            <div class="bd-actions">
+              <div class="bd-val">${fmtSize(f.size)}</div>
+              <button class="bd-trash" title="Send this file to Trash (triple-confirm)"
+                style="background:transparent; border:1px solid var(--danger); color:var(--danger); border-radius:4px; padding:2px 6px; cursor:pointer; font-size:0.7rem;">🗑</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  body.querySelectorAll('[data-add-path]').forEach(row => {
+    row.addEventListener('click', async (e) => {
+      if (e.target.closest('.bd-trash')) return;
+      const p = row.dataset.addPath;
+      const f = state.files.find(x => x.path === p);
+      if (!f) return;
+      await addToActivePlan([fileToEntryRecord(f)]);
+    });
+    row.addEventListener('dblclick', e => {
+      if (e.target.closest('.bd-trash')) return;
+      revealFile(row.dataset.addPath);
+    });
+  });
+  body.querySelectorAll('.bd-trash').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const row = btn.closest('.bd-largest-row');
+      const p = row?.dataset.addPath;
+      const scanFile = row?.dataset.scan;
+      if (!p) return;
+      if (!scanFile) { toast('Cannot trash: source scan unknown.', 'error'); return; }
+      await trashFiles([{ path: p, scanFile }]);
+    });
+  });
+}
+
+function updatePlanUI() {
+  const header = state.activePlanHeader || { totalFiles: 0, totalBytes: 0, name: 'Working plan' };
+  const badge = document.getElementById('basketBadge');
+  if (badge) badge.textContent = `Plan: ${(header.totalFiles||0).toLocaleString()}`;
+  const meta = document.getElementById('planPanelMeta');
+  if (meta) meta.textContent = `${(header.totalFiles||0).toLocaleString()} file(s) · ${fmtSize(header.totalBytes||0)}`;
+  // Reflect settings into the Plan panel controls.
+  const destSel = document.getElementById('planDestSelect');
+  if (destSel && header.destination) {
+    // Make sure the destination value exists as an option (custom paths from Browse…).
+    if (![...destSel.options].some(o => o.value === header.destination)) {
+      const opt = document.createElement('option');
+      opt.value = header.destination;
+      opt.textContent = '📂 ' + header.destination;
+      destSel.appendChild(opt);
+    }
+  }
+  const sets = [
+    ['planDestSelect', header.destination || ''],
+    ['planLayoutSelect', header.layout || 'mirrored'],
+    ['planDestModeSelect', header.destMode || 'additive'],
+    ['planTieBreakSelect', header.tieBreak || 'firstScanned'],
+  ];
+  for (const [id, val] of sets) {
+    const el = document.getElementById(id);
+    if (el && el.value !== val) el.value = val;
+  }
+  const destPath = document.getElementById('planDestPath');
+  if (destPath) destPath.textContent = header.destination ? `→ ${header.destination}` : '';
+  // Update the "+ Add filtered (N)" button label.
+  updateAddButtonLabels();
+}
+// Back-compat alias for older call sites.
+function updateBasketUI() { updatePlanUI(); }
+
+function updateAddButtonLabels() {
+  const addFilteredBtn = document.getElementById('addFilteredBtn');
+  if (addFilteredBtn) {
+    const n = (state.filtered || []).length;
+    addFilteredBtn.textContent = `+ Add filtered (${n.toLocaleString()}) to plan`;
+    addFilteredBtn.disabled = n === 0;
+  }
+  const checkedCount = document.querySelectorAll('#rows .row-check:checked').length;
+  const addCheckedBtn = document.getElementById('addCheckedBtn');
+  if (addCheckedBtn) {
+    addCheckedBtn.textContent = `+ Add checked (${checkedCount.toLocaleString()}) to plan`;
+    addCheckedBtn.disabled = checkedCount === 0;
+  }
+  const trashBtn = document.getElementById('trashCheckedBtn');
+  if (trashBtn) {
+    trashBtn.textContent = `🗑 Send checked (${checkedCount.toLocaleString()}) to Trash`;
+    trashBtn.disabled = checkedCount === 0;
+  }
+}
+
+function clearFilters() {
+  ['fName','fPath','fMinSize','fMaxSize','fAfter','fBefore','fMinDepth','fMaxDepth'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fTopFolder').value = '';
+  document.getElementById('fAge').value = '';
+  [...document.getElementById('fExt').options].forEach(o => o.selected = false);
+  [...document.getElementById('fCategory').options].forEach(o => o.selected = false);
+  document.getElementById('fDuplicates').checked = false;
+  document.getElementById('fHideDupes').checked = false;
+  applyFilters();
+}
+
+// ===== Plan executor (Phase 3) =====
+let planRunPoll = null;
+async function startPlanRun() {
+  const dest = state.activePlanHeader?.destination;
+  if (!dest) { toast('Pick a destination in the Plan panel first.', 'error'); return; }
+  const total = state.activePlanHeader?.totalFiles || 0;
+  if (total === 0) { toast('Plan is empty.', 'error'); return; }
+  // Check how many entries are actually pending before launching the run.
+  let stats = null;
+  try {
+    stats = await fetch(`/api/plan/stats?file=${encodeURIComponent(state.activePlanFile)}`).then(r => r.json());
+  } catch {}
+  const counts = stats?.counts || {};
+  const pending = counts.pending || 0;
+  const copied = counts.copied || 0;
+  const failed = counts.failed || 0;
+  const skippedExists = counts['skipped-exists'] || 0;
+  const skippedVol = counts['skipped-volume-unavailable'] || 0;
+  const sourceMissing = counts['source-missing'] || 0;
+
+  if (pending === 0) {
+    // Nothing to do. Offer reset.
+    const breakdown = [
+      copied ? `${copied.toLocaleString()} already copied` : '',
+      failed ? `${failed.toLocaleString()} failed` : '',
+      skippedExists ? `${skippedExists.toLocaleString()} skipped (already at destination)` : '',
+      skippedVol ? `${skippedVol.toLocaleString()} skipped (drive missing)` : '',
+      sourceMissing ? `${sourceMissing.toLocaleString()} source files missing` : '',
+    ].filter(Boolean).join('\n• ');
+    const msg = `This plan has nothing left to copy.\n\nStatus:\n• ${breakdown || 'all done'}\n\nClick OK to RESET completed/failed entries back to pending so the plan can re-run from scratch.\nCancel keeps the plan as-is.`;
+    if (!confirm(msg)) return;
+    try {
+      const r = await fetch('/api/plan/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planFile: state.activePlanFile }),
+      }).then(r => r.json());
+      if (r.error) { toast('Reset failed: ' + r.error, 'error'); return; }
+      toast(`Reset ${(r.flipped||0).toLocaleString()} entries back to pending.`);
+      await refreshPlanFromServer();
+      // Fall through to the normal run confirmation.
+    } catch (e) { toast('Reset failed: ' + e.message, 'error'); return; }
+  }
+
+  // Final confirm before starting.
+  const pendingNow = pending || total; // after reset it's total
+  if (!confirm(`Run plan: copy ${pendingNow.toLocaleString()} file(s) to ${dest}?\n\nLayout: ${state.activePlanHeader.layout}\nMode: ${state.activePlanHeader.destMode}\n\nThe app will prompt when a drive swap is needed.`)) return;
+  try {
+    const r = await fetch('/api/plan/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: state.activePlanFile }),
+    }).then(r => r.json());
+    if (r.error) { toast('Run failed: ' + r.error, 'error'); return; }
+    toast(`Plan run started (${r.runId}).`);
+    startRunPolling();
+  } catch (e) { toast('Run failed: ' + e.message, 'error'); }
+}
+
+function startRunPolling() {
+  if (planRunPoll) return;
+  planRunPoll = setInterval(pollPlanRun, 1000);
+  pollPlanRun();
+}
+function stopRunPolling() {
+  if (planRunPoll) { clearInterval(planRunPoll); planRunPoll = null; }
+}
+
+async function pollPlanRun() {
+  try {
+    const r = await fetch('/api/plan/run/status').then(r => r.json());
+    if (!r.active) { hideRunPanel(); stopRunPolling(); return; }
+    renderRunPanel(r);
+    updateSidebarLiveProgress(r);
+    if (r.state === 'awaiting-swap' && r.awaitingSwap) showSwapModal(r);
+    else hideSwapModal();
+    if (r.state === 'done' || r.state === 'cancelled' || r.state === 'failed') {
+      // Final tick: render once more, then stop polling and refresh plan.
+      setTimeout(async () => {
+        stopRunPolling();
+        await refreshPlanFromServer();
+        await loadPlans(); // full refresh so the sidebar reflects done state with stats
+        hideRunPanel();
+        toast(r.state === 'done'
+          ? `Plan run done: ${r.copiedFiles.toLocaleString()} copied · ${r.skippedFiles.toLocaleString()} skipped · ${r.failedFiles.toLocaleString()} failed.`
+          : `Plan run ${r.state}.`);
+      }, 1500);
+    }
+  } catch {}
+}
+
+// Patch the active plan's sidebar row in place each poll so the user sees motion
+// without re-rendering the whole sidebar list every second.
+function updateSidebarLiveProgress(s) {
+  const row = document.querySelector(`.plan-item[data-file="${state.activePlanFile}"]`);
+  if (!row) return;
+  const metaDiv = row.querySelector('.plan-meta');
+  if (!metaDiv) return;
+  const total = s.totalFiles || 0;
+  const copied = s.copiedFiles || 0;
+  const skipped = s.skippedFiles || 0;
+  const failed = s.failedFiles || 0;
+  const pending = Math.max(0, total - copied - skipped - failed);
+  const pct = total > 0 ? Math.min(100, Math.round((copied / total) * 100)) : 0;
+
+  // Find or create the live progress line at the top of the meta block.
+  let progLine = metaDiv.querySelector('.plan-live');
+  if (!progLine) {
+    progLine = document.createElement('div');
+    progLine.className = 'plan-live';
+    progLine.style.cssText = 'margin: 4px 0; font-weight: 600; color: var(--accent);';
+    metaDiv.insertBefore(progLine, metaDiv.firstChild);
+  }
+  const stateIcon = s.state === 'paused' ? '⏸'
+                   : s.state === 'awaiting-swap' ? '⏏'
+                   : '▶';
+  progLine.innerHTML = `${stateIcon} ${copied.toLocaleString()} / ${total.toLocaleString()} copied (${pct}%)`
+    + (failed ? ` · <span style="color:var(--danger)">${failed} failed</span>` : '')
+    + (skipped ? ` · <span style="color:var(--muted)">${skipped} skipped</span>` : '');
+
+  // Find or create the live progress bar below the line.
+  let progBar = metaDiv.querySelector('.plan-live-bar');
+  if (!progBar) {
+    progBar = document.createElement('div');
+    progBar.className = 'plan-live-bar';
+    progBar.style.cssText = 'height: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; margin-bottom: 6px;';
+    progBar.innerHTML = '<div style="height:100%; background: var(--accent-2); width: 0%; transition: width 250ms ease;"></div>';
+    metaDiv.insertBefore(progBar, progLine.nextSibling);
+  }
+  progBar.firstElementChild.style.width = pct + '%';
+
+  // Pulsing dot before the title while a run is active.
+  const isRunning = s.state === 'running' || s.state === 'paused' || s.state === 'awaiting-swap';
+  row.classList.toggle('plan-running', isRunning);
+}
+
+function renderRunPanel(s) {
+  let panel = document.getElementById('runPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'runPanel'; panel.className = 'run-panel';
+    document.body.appendChild(panel);
+  }
+  const pct = s.totalBytes > 0 ? (s.copiedBytes / s.totalBytes) * 100 : 0;
+  const elapsed = s.startedAt ? (Date.now() - s.startedAt) / 1000 : 0;
+  const mbps = elapsed > 1 ? (s.copiedBytes / 1024 / 1024 / elapsed).toFixed(1) : '—';
+  const drive = s.currentDrive?.driveName || '?';
+  const stateLabel = {
+    'running': '▶ Copying',
+    'paused': '⏸ Paused',
+    'awaiting-swap': '⏏ Awaiting drive swap',
+    'cancelled': '⏹ Cancelled',
+    'done': '✓ Done',
+    'failed': '✗ Failed',
+  }[s.state] || s.state;
+  panel.innerHTML = `
+    <h4>Plan run — ${stateLabel}</h4>
+    <div class="run-line">
+      <strong>${s.copiedFiles.toLocaleString()}</strong>/${s.totalFiles.toLocaleString()} files
+      · ${fmtSize(s.copiedBytes)}/${fmtSize(s.totalBytes)} · ${mbps} MB/s
+    </div>
+    <div class="run-bar"><div style="width:${pct.toFixed(1)}%"></div></div>
+    <div class="run-meta">Drive: ${escapeHtml(drive)} · Group ${s.groupsDone}/${s.groupsTotal}
+      ${s.skippedFiles ? `· skipped ${s.skippedFiles}` : ''}
+      ${s.failedFiles ? `· <span style="color:var(--danger)">failed ${s.failedFiles}</span>` : ''}
+    </div>
+    <div class="run-current" title="${escapeHtml(s.currentFile || '')}">${escapeHtml(s.currentFile || '')}</div>
+    <div class="run-actions">
+      <button class="ghost-btn" id="runPauseBtn">${s.state === 'paused' ? 'Resume' : 'Pause'}</button>
+      <button class="ghost-btn" id="runCancelBtn" style="border-color: var(--danger); color: var(--danger);">Cancel</button>
+    </div>
+  `;
+  document.getElementById('runPauseBtn').addEventListener('click', async () => {
+    await fetch(s.state === 'paused' ? '/api/plan/run/resume' : '/api/plan/run/pause', { method: 'POST' });
+  });
+  document.getElementById('runCancelBtn').addEventListener('click', async () => {
+    if (!confirm('Cancel the running plan? Already-copied files are kept; remaining stay pending.')) return;
+    await fetch('/api/plan/run/cancel', { method: 'POST' });
+  });
+}
+function hideRunPanel() {
+  const panel = document.getElementById('runPanel');
+  if (panel) panel.remove();
+}
+
+function showSwapModal(s) {
+  if (document.getElementById('swapModal')) return;
+  const drive = s.awaitingSwap.driveName || '?';
+  const uuid = s.awaitingSwap.uuid;
+  const hasUuid = uuid && uuid !== '(no UUID)';
+  const allMounts = (s.mountedVolumes || []).filter(v => v.path && v.path.startsWith('/Volumes/'));
+  // Try to suggest a likely match — same name (case-insensitive), or prefix overlap.
+  let suggested = null;
+  const dLow = (drive || '').toLowerCase();
+  suggested = allMounts.find(v => v.name.toLowerCase() === dLow)
+           || allMounts.find(v => v.name.toLowerCase().startsWith(dLow + ' ') || dLow.startsWith(v.name.toLowerCase() + ' '))
+           || null;
+  const mountsRows = allMounts.map(v =>
+    `<li><code>${escapeHtml(v.name)}</code> at <code>${escapeHtml(v.path)}</code>${v.uuid ? ` — UUID <code>${escapeHtml(v.uuid)}</code>` : ' — <em>no UUID</em>'}</li>`
+  ).join('');
+  const mountOptions = allMounts.map(v =>
+    `<option value="${escapeHtml(v.path)}" ${suggested && v.path === suggested.path ? 'selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.path)}</option>`
+  ).join('');
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop'; backdrop.id = 'swapModal';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>⏏ Drive swap needed</h3>
+      <p style="margin-top:0;">
+        Please plug in this drive next to continue copying:
+      </p>
+      <div style="background:var(--panel-2); padding:10px 14px; border-radius:8px; border:1px solid var(--accent); margin-bottom:14px;">
+        <div style="font-size:1.05rem; font-weight:600;">${escapeHtml(drive)}</div>
+        <div style="font-size:0.78rem; color:var(--muted); margin-top:4px;">
+          Expected UUID: <code>${hasUuid ? escapeHtml(uuid) : '(no UUID was recorded when this scan was made)'}</code>
+        </div>
+      </div>
+
+      ${!hasUuid ? `
+        <div style="background: oklch(28% 0.04 60 / 0.4); border:1px solid var(--accent); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:0.85rem;">
+          <strong>No UUID was recorded for this scan</strong> — the app can't auto-verify the drive.
+          Pick the correct drive below from the currently-mounted volumes, then click <strong>Use this drive</strong>.
+        </div>
+      ` : ''}
+
+      <label style="display:block !important; margin-bottom:12px; color:var(--text) !important; text-transform:none !important; letter-spacing:0 !important; font-size:0.85rem;">
+        <span style="display:block; margin-bottom:4px; color:var(--muted); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em;">Currently mounted volumes</span>
+        <select id="swapMountSelect" style="display:block; width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem;">
+          <option value="">— choose the drive that holds the source files —</option>
+          ${mountOptions}
+        </select>
+      </label>
+
+      <details style="margin-bottom:12px;">
+        <summary style="cursor:pointer; color:var(--muted); font-size:0.78rem;">Show full mount details (${allMounts.length})</summary>
+        <ul style="font-size:0.78rem; color:var(--muted); margin:8px 0 0; padding-left:20px;">${mountsRows}</ul>
+      </details>
+
+      <p style="font-size:0.82rem; color:var(--muted);">
+        <strong>Continue</strong> tries to auto-match the drive by name/UUID — works only if the drive is mounted under its scan-time name.
+        <strong>Use this drive</strong> forces the executor to use the drive you picked in the dropdown above — useful when the drive was renamed (e.g. <code>X 1</code> instead of <code>X</code>) or has no UUID.
+        <strong>Skip drive</strong> leaves its files for later.
+      </p>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="swapSkipBtn" style="border-color:var(--danger); color:var(--danger);">Skip drive</button>
+        <button class="ghost-btn" id="swapContinueBtn">Continue (auto-match)</button>
+        <button class="primary-btn" id="swapUseThisBtn">Use this drive ▶</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  document.getElementById('swapContinueBtn').addEventListener('click', async () => {
+    await fetch('/api/plan/run/swap-ready', { method: 'POST' });
+    hideSwapModal();
+  });
+  document.getElementById('swapUseThisBtn').addEventListener('click', async () => {
+    const sel = document.getElementById('swapMountSelect');
+    const mountPath = sel.value;
+    if (!mountPath) { toast('Pick a drive from the dropdown first.', 'error'); return; }
+    try {
+      const r = await fetch('/api/plan/run/swap-resolve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mountPath }),
+      }).then(r => r.json());
+      if (r.error) { toast('Failed: ' + r.error, 'error'); return; }
+      hideSwapModal();
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  });
+  document.getElementById('swapSkipBtn').addEventListener('click', async () => {
+    if (!confirm('Skip this drive? Its remaining files will be left as pending so you can re-run the plan later.')) return;
+    await fetch('/api/plan/run/skip-drive', { method: 'POST' });
+    hideSwapModal();
+  });
+}
+function hideSwapModal() {
+  const m = document.getElementById('swapModal');
+  if (m) m.remove();
+}
+
+// Replace the placeholder doCopy with the real executor.
+async function doCopy() { startPlanRun(); }
+
+// On page load, if a run is already in progress on the server, attach the UI.
+(async () => {
+  try {
+    const r = await fetch('/api/plan/run/status').then(r => r.json());
+    if (r.active) startRunPolling();
+  } catch {}
+})();
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.addEventListener('click', (e) => {
+    // Ignore clicks that originated on the resizer handle.
+    if (e.target.classList.contains('col-resizer')) return;
+    const k = th.dataset.sort;
+    if (state.sortKey === k) state.sortDir *= -1;
+    else { state.sortKey = k; state.sortDir = k === 'size' || k === 'mtime' ? -1 : 1; }
+    sortAndRender();
+  });
+});
+
+// Column resizing — persisted to localStorage.
+// Capture HTML-default widths once, so double-click can restore them.
+const DEFAULT_COL_WIDTHS = (() => {
+  const m = {};
+  document.querySelectorAll('#filesTable colgroup col[data-col]').forEach(col => {
+    const w = parseInt(col.style.width, 10);
+    if (isFinite(w)) m[col.dataset.col] = w;
+  });
+  return m;
+})();
+function lockTableWidth() {
+  // Sum every col width and pin the table to that exact number so resizing one column
+  // never causes the others to reflow.
+  const cols = document.querySelectorAll('#filesTable colgroup col[data-col]');
+  let total = 0;
+  cols.forEach(col => {
+    const w = parseInt(col.style.width, 10);
+    if (isFinite(w)) total += w;
+  });
+  const table = document.getElementById('filesTable');
+  if (table && total > 0) table.style.width = total + 'px';
+}
+function applySavedColumnWidths() {
+  try {
+    // Bumping this version key wipes stale widths from before new columns were added.
+    const VERSION = 'v3';
+    if (localStorage.getItem('wn_col_widths_v') !== VERSION) {
+      localStorage.removeItem('wn_col_widths');
+      localStorage.setItem('wn_col_widths_v', VERSION);
+    }
+    const saved = JSON.parse(localStorage.getItem('wn_col_widths') || '{}');
+    document.querySelectorAll('#filesTable colgroup col[data-col]').forEach(col => {
+      const w = saved[col.dataset.col];
+      if (w) col.style.width = w + 'px';
+    });
+  } catch {}
+  lockTableWidth();
+}
+function saveColumnWidth(name, px) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('wn_col_widths') || '{}');
+    saved[name] = Math.round(px);
+    localStorage.setItem('wn_col_widths', JSON.stringify(saved));
+  } catch {}
+}
+document.querySelectorAll('#filesTable th.resizable').forEach(th => {
+  const handle = th.querySelector('.col-resizer');
+  if (!handle) return;
+  const colName = th.dataset.col;
+  const col = document.querySelector(`#filesTable colgroup col[data-col="${colName}"]`);
+  if (!col) return;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.classList.add('dragging');
+    const startX = e.clientX;
+    const startW = col.getBoundingClientRect().width;
+    function onMove(ev) {
+      const w = Math.max(40, startW + (ev.clientX - startX));
+      col.style.width = w + 'px';
+      lockTableWidth();
+    }
+    function onUp() {
+      handle.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveColumnWidth(colName, col.getBoundingClientRect().width);
+      lockTableWidth();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  // Double-click to reset that column to default.
+  handle.addEventListener('dblclick', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    const def = DEFAULT_COL_WIDTHS[colName];
+    col.style.width = (def ? def : 100) + 'px';
+    try {
+      const saved = JSON.parse(localStorage.getItem('wn_col_widths') || '{}');
+      delete saved[colName];
+      localStorage.setItem('wn_col_widths', JSON.stringify(saved));
+    } catch {}
+    lockTableWidth();
+  });
+});
+applySavedColumnWidths();
+
+// Sidebar width — drag the vertical handle to resize, persisted to localStorage.
+(() => {
+  const main = document.querySelector('main');
+  const handle = document.getElementById('sidebarResizer');
+  if (!main || !handle) return;
+  const savedW = parseInt(localStorage.getItem('wn_sidebar_w') || '', 10);
+  if (savedW > 100) main.style.setProperty('--sidebar-w', savedW + 'px');
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    handle.classList.add('dragging');
+    const startX = e.clientX;
+    const startW = parseInt(getComputedStyle(main).getPropertyValue('--sidebar-w'), 10) || 320;
+    function onMove(ev) {
+      const w = Math.max(140, Math.min(window.innerWidth - 300, startW + (ev.clientX - startX)));
+      main.style.setProperty('--sidebar-w', w + 'px');
+    }
+    function onUp() {
+      handle.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      const w = parseInt(getComputedStyle(main).getPropertyValue('--sidebar-w'), 10);
+      if (w) localStorage.setItem('wn_sidebar_w', String(w));
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  // Double-click resets to default.
+  handle.addEventListener('dblclick', () => {
+    main.style.setProperty('--sidebar-w', '320px');
+    localStorage.removeItem('wn_sidebar_w');
+  });
+})();
+
+// === Uniform panel system: collapse + resize + persistence ===
+(() => {
+  const STORAGE_KEY = 'wn_panels_v1';
+  function loadState() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
+  }
+  function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+  const state = loadState();
+
+  document.querySelectorAll('.panel[data-panel]').forEach(panel => {
+    const id = panel.dataset.panel;
+    const saved = state[id] || {};
+    if (saved.collapsed) panel.classList.add('collapsed');
+    if (saved.height && !panel.classList.contains('grow') && !saved.collapsed) {
+      panel.style.height = saved.height + 'px';
+    }
+
+    // Collapse toggle on header click.
+    const header = panel.querySelector('.panel-header[data-toggle]');
+    if (header) {
+      header.addEventListener('click', e => {
+        // Don't toggle if click was on a button or input inside the header.
+        if (e.target.closest('button, input, select, a')) return;
+        const nowCollapsed = !panel.classList.contains('collapsed');
+        panel.classList.toggle('collapsed', nowCollapsed);
+        state[id] = state[id] || {};
+        state[id].collapsed = nowCollapsed;
+        saveState(state);
+      });
+    }
+
+    // Vertical resize via bottom handle.
+    const handle = panel.querySelector('.panel-resizer[data-resize]');
+    if (handle) {
+      handle.addEventListener('mousedown', e => {
+        e.preventDefault();
+        handle.classList.add('dragging');
+        const startY = e.clientY;
+        const startH = panel.getBoundingClientRect().height;
+        function onMove(ev) {
+          const h = Math.max(60, startH + (ev.clientY - startY));
+          panel.style.height = h + 'px';
+        }
+        function onUp() {
+          handle.classList.remove('dragging');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          state[id] = state[id] || {};
+          state[id].height = Math.round(panel.getBoundingClientRect().height);
+          saveState(state);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+  });
+
+  // Sidebar collapse button.
+  const sidebar = document.getElementById('sidebar');
+  const sToggle = document.getElementById('sidebarToggle');
+  const resizer = document.getElementById('sidebarResizer');
+  const main = document.querySelector('main');
+  function applySidebarCollapsed(collapsed) {
+    sidebar.classList.toggle('collapsed', collapsed);
+    if (collapsed) {
+      main.style.setProperty('--sidebar-w', '44px');
+      if (resizer) resizer.style.display = 'none';
+      sToggle.textContent = '▶';
+      sToggle.title = 'Expand sidebar';
+    } else {
+      const w = state.sidebar?.width || 320;
+      main.style.setProperty('--sidebar-w', w + 'px');
+      if (resizer) resizer.style.display = '';
+      sToggle.textContent = '◀ Hide sidebar';
+    }
+  }
+  if (state.sidebar?.collapsed) applySidebarCollapsed(true);
+  else if (state.sidebar?.width) main.style.setProperty('--sidebar-w', state.sidebar.width + 'px');
+  sToggle.addEventListener('click', () => {
+    const nowCollapsed = !sidebar.classList.contains('collapsed');
+    state.sidebar = state.sidebar || {};
+    state.sidebar.collapsed = nowCollapsed;
+    saveState(state);
+    applySidebarCollapsed(nowCollapsed);
+  });
+
+  // Hook sidebar drag to persist into the same store.
+  if (resizer) {
+    resizer.addEventListener('mouseup', () => {
+      const w = parseInt(getComputedStyle(main).getPropertyValue('--sidebar-w'), 10);
+      if (w && !sidebar.classList.contains('collapsed')) {
+        state.sidebar = state.sidebar || {};
+        state.sidebar.width = w;
+        saveState(state);
+      }
+    });
+  }
+
+  // Reset layout button — wipes all panel state.
+  const resetBtn = document.getElementById('resetLayoutBtn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (!confirm('Reset all panel sizes, collapsed states, and column widths to defaults?')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem('wn_col_widths');
+      localStorage.removeItem('wn_sidebar_w');
+      location.reload();
+    });
+  }
+
+  // Expand all — uncollapse every panel, drop height locks, scroll main section.
+  const expandBtn = document.getElementById('expandAllBtn');
+  const section = document.querySelector('section.content');
+  let expanded = false;
+  const savedHeights = new Map();
+  function applyExpandAll(on) {
+    expanded = on;
+    expandBtn.textContent = on ? 'Compact view' : 'Expand all';
+    expandBtn.title = on
+      ? 'Return to fixed panel heights (each panel scrolls internally)'
+      : 'Expand every panel and let the main section scroll vertically';
+    document.querySelectorAll('.panel[data-panel]').forEach(panel => {
+      if (on) {
+        if (panel.classList.contains('collapsed')) panel.classList.remove('collapsed');
+        if (panel.style.height) {
+          savedHeights.set(panel.dataset.panel, panel.style.height);
+          panel.style.height = '';
+        }
+        panel.style.flex = '0 0 auto'; // intrinsic content height, no flex-grow fighting
+        panel.style.maxHeight = 'none';
+      } else {
+        const h = savedHeights.get(panel.dataset.panel);
+        if (h) panel.style.height = h;
+        panel.style.flex = '';
+        panel.style.maxHeight = '';
+      }
+    });
+    if (section) {
+      section.style.overflowY = on ? 'auto' : '';
+      section.style.overflowX = on ? 'hidden' : '';
+    }
+  }
+  if (expandBtn) expandBtn.addEventListener('click', () => applyExpandAll(!expanded));
+})();
+
+// Filter inputs commit ONLY on blur (click/tab away) or Enter.
+// Typing never triggers a recompute — the input stays responsive no matter how
+// large the loaded scan(s) are. The browser repaints the character you typed
+// immediately because no JS work is queued.
+['fName','fPath','fMinSize','fMaxSize','fAfter','fBefore','fMinDepth','fMaxDepth'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('change', applyFilters); // fires on blur for text/number inputs
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
+});
+document.getElementById('fTopFolder').addEventListener('change', applyFilters);
+document.getElementById('fExt').addEventListener('change', applyFilters);
+document.getElementById('fAge').addEventListener('change', applyFilters);
+document.getElementById('fCategory').addEventListener('change', () => {
+  // Narrow the Extensions list to those that fall under the chosen categories,
+  // so you can drill deeper (e.g. category=image, then ext=heic only).
+  populateExtFilter();
+  applyFilters();
+});
+document.getElementById('fDuplicates').addEventListener('change', e => {
+  if (e.target.checked) document.getElementById('fHideDupes').checked = false;
+  applyFilters();
+});
+document.getElementById('fHideDupes').addEventListener('change', e => {
+  if (e.target.checked) document.getElementById('fDuplicates').checked = false;
+  applyFilters();
+});
+document.getElementById('fClear').addEventListener('click', clearFilters);
+document.getElementById('selectAll').addEventListener('change', e => {
+  // Just toggles checked rows visually — actual plan changes happen via Add buttons.
+  document.querySelectorAll('#rows .row-check').forEach(cb => {
+    cb.checked = e.target.checked;
+  });
+  updateAddButtonLabels();
+});
+
+// === Plan panel wiring ===
+document.getElementById('addFilteredBtn').addEventListener('click', async () => {
+  const records = (state.filtered || []).map(fileToEntryRecord);
+  await addToActivePlan(records);
+});
+document.getElementById('addCheckedBtn').addEventListener('click', async () => {
+  const paths = new Set([...document.querySelectorAll('#rows .row-check:checked')]
+    .map(cb => cb.closest('tr')?.dataset.path).filter(Boolean));
+  const records = state.files.filter(f => paths.has(f.path)).map(fileToEntryRecord);
+  await addToActivePlan(records);
+});
+document.getElementById('trashCheckedBtn').addEventListener('click', async () => {
+  const trs = [...document.querySelectorAll('#rows .row-check:checked')].map(cb => cb.closest('tr')).filter(Boolean);
+  const records = trs.map(tr => ({ path: tr.dataset.path, scanFile: tr.dataset.scan }))
+    .filter(r => r.path && r.scanFile);
+  if (!records.length) {
+    toast('No files selected, or their source scan is unknown.', 'error');
+    return;
+  }
+  await trashFiles(records);
+});
+document.getElementById('planClearBtn').addEventListener('click', async () => {
+  if (!confirm('Clear all entries from this plan? The plan itself stays; only the file list is emptied.')) return;
+  try {
+    await fetch('/api/plan/clear', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: state.activePlanFile }),
+    });
+    toast('Plan cleared.');
+    await refreshPlanFromServer();
+  } catch (e) { toast('Clear failed: ' + e.message, 'error'); }
+});
+document.getElementById('planSaveAsBtn').addEventListener('click', async () => {
+  const name = prompt('Save plan as (a short name):');
+  if (!name) return;
+  try {
+    const r = await fetch('/api/plan/save-as', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: state.activePlanFile, name }),
+    }).then(r => r.json());
+    if (r.error) { toast('Save failed: ' + r.error, 'error'); return; }
+    toast(`Saved as "${name}".`);
+    await loadPlans();
+    await rebuildPlanSelector();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+});
+document.getElementById('planOpenInViewBtn').addEventListener('click', async () => {
+  toast('Open-in-view: coming with Phase 3.');
+});
+document.getElementById('planRunBtn').addEventListener('click', doCopy);
+
+// Persist setting changes back to the active plan.
+async function pushPlanSettings() {
+  const body = {
+    planFile: state.activePlanFile,
+    destination: document.getElementById('planDestSelect').value,
+    layout: document.getElementById('planLayoutSelect').value,
+    destMode: document.getElementById('planDestModeSelect').value,
+    tieBreak: document.getElementById('planTieBreakSelect').value,
+  };
+  try {
+    const resp = await fetch('/api/plan/update-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${text.slice(0, 120)} — restart the server (new endpoint).`);
+    }
+    const r = await resp.json();
+    if (r.plan) state.activePlanHeader = r.plan;
+    const status = document.getElementById('planSettingsStatus');
+    if (status) { status.textContent = 'Saved.'; setTimeout(() => { status.textContent = ''; }, 1500); }
+    // Enable Run only when destination is set.
+    document.getElementById('planRunBtn').disabled = !body.destination;
+  } catch (e) { toast('Settings save failed: ' + e.message, 'error'); }
+}
+['planDestSelect','planLayoutSelect','planDestModeSelect','planTieBreakSelect'].forEach(id =>
+  document.getElementById(id).addEventListener('change', pushPlanSettings));
+
+document.getElementById('planDestBrowse').addEventListener('click', async () => {
+  const btn = document.getElementById('planDestBrowse');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Picking…';
+  try {
+    const resp = await fetch('/api/choose-folder', { method: 'POST' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const r = await resp.json();
+    if (r.cancelled) { toast('Folder pick cancelled.'); return; }
+    if (r.error) { toast('Folder pick failed: ' + r.error, 'error'); return; }
+    if (r.path) {
+      const sel = document.getElementById('planDestSelect');
+      if (![...sel.options].some(o => o.value === r.path)) {
+        const opt = document.createElement('option');
+        opt.value = r.path;
+        opt.textContent = '📂 ' + r.path;
+        sel.appendChild(opt);
+      }
+      sel.value = r.path;
+      await pushPlanSettings();
+      toast(`Destination set: ${r.path}`);
+    }
+  } catch (e) { toast('Folder pick failed: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+});
+
+document.getElementById('planActiveSelect').addEventListener('change', async e => {
+  state.activePlanFile = e.target.value;
+  localStorage.setItem('wn_active_plan', state.activePlanFile);
+  await refreshPlanFromServer();
+});
+
+async function rebuildPlanSelector() {
+  const sel = document.getElementById('planActiveSelect');
+  if (!sel) return;
+  let plans = [];
+  try { plans = (await fetch('/api/plans').then(r => r.json())).plans || []; } catch {}
+  const options = ['<option value="working.plan.json">Working plan</option>'];
+  for (const p of plans) {
+    if (p.file === 'working.plan.json') continue;
+    const label = (p.header && p.header.name) || p.file;
+    options.push(`<option value="${escapeHtml(p.file)}">${escapeHtml(label)}</option>`);
+  }
+  sel.innerHTML = options.join('');
+  sel.value = state.activePlanFile;
+}
+
+// Migrate old localStorage basket on first load.
+(async () => {
+  try {
+    const legacy = localStorage.getItem('wn_basket');
+    if (legacy && legacy !== '[]') {
+      const paths = JSON.parse(legacy);
+      if (Array.isArray(paths) && paths.length) {
+        // We don't have full file records for legacy paths, so send minimal entries.
+        const records = paths.map(p => ({
+          srcPath: p, size: 0, mtime: 0, ext: (p.split('.').pop() || '').toLowerCase(), name: p.split('/').pop(),
+        }));
+        const r = await fetch('/api/plan/add', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ planFile: 'working.plan.json', entries: records }),
+        }).then(r => r.json());
+        if (!r.error) {
+          toast(`Migrated ${r.added} item(s) from old basket into Working plan.`);
+          localStorage.removeItem('wn_basket');
+        }
+      } else {
+        localStorage.removeItem('wn_basket');
+      }
+    }
+  } catch {}
+  await rebuildPlanSelector();
+  await refreshPlanFromServer();
+})();
+
+// ===== Copy plans (Phase 1) =====
+async function loadPlans() {
+  // Always rebuild the active-plan dropdown in step with the sidebar list.
+  if (typeof rebuildPlanSelector === 'function') await rebuildPlanSelector();
+  const el = document.getElementById('plansList');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/plans').then(r => r.json());
+    if (!r.plans || !r.plans.length) {
+      el.innerHTML = '<div style="color:var(--muted); font-size:0.78rem;">No plans yet.</div>';
+      return;
+    }
+    // Fetch per-plan stats so each row can show its progress.
+    const statsByFile = {};
+    await Promise.all(r.plans.map(async p => {
+      try {
+        const s = await fetch(`/api/plan/stats?file=${encodeURIComponent(p.file)}`).then(r => r.json());
+        statsByFile[p.file] = s;
+      } catch {}
+    }));
+
+    el.innerHTML = r.plans.map(p => {
+      const h = p.header || {};
+      const isActive = p.file === state.activePlanFile;
+      const s = statsByFile[p.file] || { counts: {}, total: h.totalFiles || 0 };
+      const c = s.counts || {};
+      const pending = c.pending || 0;
+      const copied = c.copied || 0;
+      const failed = c.failed || 0;
+      const canRun = (h.totalFiles||0) > 0 && !!h.destination;
+      const isDone = (h.totalFiles||0) > 0 && pending === 0 && copied > 0;
+      const isPartial = copied > 0 && pending > 0;
+      const runLabel = isDone ? '↻ Re-run' : isPartial ? '▶ Resume' : '▶ Run';
+      const runTitle = isDone
+        ? 'All entries copied. Click to reset and run again.'
+        : isPartial
+          ? `Resume — ${pending.toLocaleString()} of ${(h.totalFiles||0).toLocaleString()} pending`
+          : canRun ? 'Run this plan' : 'Set destination first';
+      const statusLine = isDone
+        ? `<span style="color: var(--accent-2);">✓ Done · ${copied.toLocaleString()} copied${failed ? ` · <span style="color:var(--danger)">${failed} failed</span>` : ''}</span>`
+        : isPartial
+          ? `<span style="color: var(--accent);">⏵ ${copied.toLocaleString()} copied · ${pending.toLocaleString()} pending</span>`
+          : pending > 0 ? `<span style="color: var(--muted);">○ ${pending.toLocaleString()} pending</span>` : '';
+      return `
+        <div class="plan-item ${isActive ? 'plan-active' : ''}" data-file="${escapeHtml(p.file)}"
+             style="cursor:pointer; ${isActive ? 'border-color: var(--accent); background: oklch(28% 0.04 200 / 0.3);' : ''}">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <strong style="flex:1; word-break:break-all;">${isActive ? '● ' : ''}${escapeHtml(p.file)}</strong>
+            <button class="plan-run" data-file="${escapeHtml(p.file)}" title="${runTitle}"
+              ${canRun ? '' : 'disabled'}
+              style="background:transparent;border:1px solid var(--accent-2);color:var(--accent-2);
+                     border-radius:4px;padding:2px 8px;cursor:${canRun ? 'pointer' : 'not-allowed'};font-size:0.72rem;${canRun ? '' : 'opacity:0.4;'}">${runLabel}</button>
+            <button class="plan-del" data-file="${escapeHtml(p.file)}" title="Delete plan"
+              style="background:transparent;border:1px solid var(--border);color:var(--muted);
+                     border-radius:4px;padding:2px 6px;cursor:pointer;font-size:0.7rem;">✕</button>
+          </div>
+          <div class="plan-meta">
+            ${(h.totalFiles||0).toLocaleString()} files · ${fmtSize(h.totalBytes||0)} · ${h.layout||'?'} · ${h.tieBreak||'?'}<br>
+            ${h.sources ? h.sources.length + ' source(s) → ' + escapeHtml(h.destination || '(no destination set)') : ''}
+            ${statusLine ? `<br>${statusLine}` : ''}
+            ${h.duplicatesCollapsed ? `<br>${h.duplicatesCollapsed.toLocaleString()} duplicates collapsed` : ''}
+            ${h.errorCount ? ` · <span style="color:var(--danger)">${h.errorCount} source-errors</span>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    // Click anywhere on the row (except buttons) → set this plan as active.
+    el.querySelectorAll('.plan-item').forEach(item => {
+      item.addEventListener('click', async (e) => {
+        if (e.target.closest('button')) return;
+        const file = item.dataset.file;
+        if (file === state.activePlanFile) return;
+        state.activePlanFile = file;
+        localStorage.setItem('wn_active_plan', file);
+        await refreshPlanFromServer();
+        loadPlans();
+        toast(`Active plan: ${file}`);
+      });
+    });
+
+    // Run button → set this plan as active, then start the run.
+    el.querySelectorAll('.plan-run').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const file = btn.dataset.file;
+        // Switch active plan first so the run panel + UI reflect it.
+        if (file !== state.activePlanFile) {
+          state.activePlanFile = file;
+          localStorage.setItem('wn_active_plan', file);
+          await refreshPlanFromServer();
+        }
+        await startPlanRun();
+        loadPlans();
+      });
+    });
+
+    el.querySelectorAll('.plan-del').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const file = btn.dataset.file;
+        if (!confirm(`Delete plan ${file}?\nThis removes the plan and its entries list. Does NOT delete any copied files.`)) return;
+        try {
+          const rr = await fetch('/api/plan/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file }),
+          }).then(r => r.json());
+          if (rr.error) alert(rr.error);
+          loadPlans();
+        } catch (err) { alert('Failed: ' + err.message); }
+      });
+    });
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--danger);font-size:0.78rem;">Failed to load plans.</div>';
+  }
+}
+
+function openPlanModal(scanFiles) {
+  // scanFiles: array of header.json filenames, in scan order.
+  const destOptions = state.volumes
+    .filter(v => v.path !== '/')
+    .map(v => `<option value="${escapeHtml(v.path)}">${escapeHtml(v.name)} — ${escapeHtml(v.path)}</option>`)
+    .join('');
+
+  const orderState = [...scanFiles];
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-label="Build copy plan">
+      <h3>Build copy plan</h3>
+      <p style="color:var(--muted); font-size:0.85rem; margin-top:0;">
+        Builds a deduplicated list of files across the selected source scans. No files are copied yet — this only creates the plan.
+      </p>
+      <label>Source order (top = "first scanned" for tie-break)
+        <ul class="source-order" id="planSourceOrder"></ul>
+      </label>
+      <label>Destination drive (where the copy will land)
+        <select id="planDest">
+          <option value="">Choose…</option>
+          ${destOptions}
+        </select>
+      </label>
+      <label>Layout
+        <select id="planLayout">
+          <option value="mirrored">Mirrored per drive (Dest/&lt;Drive&gt;/&lt;path&gt;)</option>
+          <option value="flat">Flat (Dest/filename, with auto-rename on collision)</option>
+        </select>
+      </label>
+      <label>Tie-break (which copy wins when the same file exists on multiple drives)
+        <select id="planTieBreak">
+          <option value="firstScanned">First drive scanned (top of source order)</option>
+          <option value="newest">Newest modified</option>
+          <option value="oldest">Oldest modified</option>
+          <option value="shortestPath">Shortest source path</option>
+          <option value="largest">Largest size</option>
+        </select>
+      </label>
+      <label>Destination mode (when a file already exists at destination)
+        <select id="planDestMode">
+          <option value="additive">Additive — skip if exists (safest, default)</option>
+          <option value="overwrite">Overwrite</option>
+          <option value="fresh">Fresh — destination must be empty</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="planCancelBtn">Cancel</button>
+        <button class="primary-btn" id="planBuildBtn">Build plan</button>
+      </div>
+      <div id="planProgress" style="margin-top:12px; display:none; color:var(--muted); font-size:0.85rem;"></div>
+    </div>`;
+  document.body.appendChild(backdrop);
+
+  function renderOrder() {
+    const ul = backdrop.querySelector('#planSourceOrder');
+    ul.innerHTML = orderState.map((s, i) => `
+      <li>
+        <span style="flex:1; word-break:break-all;">${i+1}. ${escapeHtml(s)}</span>
+        <span class="move-btns">
+          <button data-act="up" data-i="${i}" ${i===0?'disabled':''}>▲</button>
+          <button data-act="down" data-i="${i}" ${i===orderState.length-1?'disabled':''}>▼</button>
+        </span>
+      </li>`).join('');
+    ul.querySelectorAll('button[data-act]').forEach(b => {
+      b.addEventListener('click', () => {
+        const i = +b.dataset.i;
+        const j = b.dataset.act === 'up' ? i - 1 : i + 1;
+        if (j < 0 || j >= orderState.length) return;
+        [orderState[i], orderState[j]] = [orderState[j], orderState[i]];
+        renderOrder();
+      });
+    });
+  }
+  renderOrder();
+
+  backdrop.querySelector('#planCancelBtn').addEventListener('click', () => backdrop.remove());
+  backdrop.querySelector('#planBuildBtn').addEventListener('click', async () => {
+    const destination = backdrop.querySelector('#planDest').value;
+    const layout = backdrop.querySelector('#planLayout').value;
+    const tieBreak = backdrop.querySelector('#planTieBreak').value;
+    const destMode = backdrop.querySelector('#planDestMode').value;
+    if (!destination) { alert('Pick a destination.'); return; }
+    const buildBtn = backdrop.querySelector('#planBuildBtn');
+    buildBtn.disabled = true;
+    const prog = backdrop.querySelector('#planProgress');
+    prog.style.display = 'block';
+    prog.textContent = 'Submitting…';
+    try {
+      const start = await fetch('/api/plan/build', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceScans: orderState, destination, layout, tieBreak, destMode }),
+      }).then(r => r.json());
+      if (start.error) { prog.textContent = 'Error: ' + start.error; buildBtn.disabled = false; return; }
+      // Poll status.
+      const planId = start.planId;
+      const timer = setInterval(async () => {
+        try {
+          const s = await fetch('/api/plan/status?id=' + encodeURIComponent(planId)).then(r => r.json());
+          const p = s.progress || {};
+          let msg = p.phase || 'working';
+          if (p.phase === 'reading-sources') msg += ` (${p.filesRead||0}/${p.totalSources||'?'})`;
+          if (p.phase === 'deduping') msg += ` · ${(p.processed||0).toLocaleString()} records`;
+          if (p.phase === 'done') {
+            msg = `Done — ${p.totalFiles.toLocaleString()} unique files · ${fmtSize(p.totalBytes)} · ${p.duplicatesCollapsed.toLocaleString()} duplicates collapsed${p.errorCount ? ` · ${p.errorCount} source-errors` : ''}`;
+          }
+          prog.textContent = msg;
+          if (s.status === 'done') {
+            clearInterval(timer);
+            setTimeout(() => { backdrop.remove(); loadPlans(); }, 1500);
+          } else if (s.status === 'failed') {
+            clearInterval(timer);
+            prog.textContent = 'Build failed: ' + (s.error || 'unknown');
+            buildBtn.disabled = false;
+          }
+        } catch {}
+      }, 800);
+    } catch (e) {
+      prog.textContent = 'Failed: ' + e.message;
+      buildBtn.disabled = false;
+    }
+  });
+}
+
+document.getElementById('newPlanBtn').addEventListener('click', () => {
+  if (!state.selectedScans || state.selectedScans.size === 0) {
+    alert('Tick one or more saved scans in the sidebar first.');
+    return;
+  }
+  openPlanModal([...state.selectedScans]);
+});
+
+// Refresh the "Build plan" button enabled state whenever scan selection changes.
+function refreshPlanButton() {
+  const btn = document.getElementById('newPlanBtn');
+  if (!btn) return;
+  const n = (state.selectedScans && state.selectedScans.size) || 0;
+  btn.disabled = n === 0;
+  btn.textContent = n === 0
+    ? '+ Build copy plan from selected scans'
+    : `+ Build copy plan from ${n} scan(s)`;
+}
+// Hook into existing scan-selection paths by wrapping loadSelectedScans.
+const _origLoadSelectedScans = loadSelectedScans;
+loadSelectedScans = async function() {
+  await _origLoadSelectedScans.apply(this, arguments);
+  refreshPlanButton();
+};
+refreshPlanButton();
+
+loadPlans();
+
+// ===== Perfect-backup wizard =====
+const backupWizard = {
+  el: null,
+  phase: 'A', // A: sources, B: destination, C: review, D: running
+  selectedScans: new Set(),
+  destination: '',
+  layout: 'mirrored',
+  tieBreak: 'firstScanned',
+  destMode: 'additive',
+  builtPlanFile: null,
+};
+
+async function openBackupWizard() {
+  if (document.getElementById('backupWizard')) return;
+  const back = document.createElement('div');
+  back.className = 'modal-backdrop'; back.id = 'backupWizard';
+  back.innerHTML = `
+    <div class="modal" style="max-width: 720px;">
+      <h3 style="display:flex; align-items:center; gap:10px;">
+        🛟 Perfect backup
+        <span id="bwPhaseChip" style="font-size:0.7rem; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase;"></span>
+      </h3>
+      <div id="bwBody" style="min-height: 280px;"></div>
+      <div class="modal-actions" id="bwActions"></div>
+    </div>
+  `;
+  document.body.appendChild(back);
+  backupWizard.el = back;
+  backupWizard.phase = 'A';
+  backupWizard.selectedScans = new Set(state.selectedScans || []);
+  // Default settings.
+  backupWizard.destination = '';
+  backupWizard.layout = 'mirrored';
+  backupWizard.tieBreak = 'firstScanned';
+  backupWizard.destMode = 'additive';
+  backupWizard.builtPlanFile = null;
+  await renderBackupWizard();
+}
+function closeBackupWizard() {
+  if (backupWizard.el) backupWizard.el.remove();
+  backupWizard.el = null;
+}
+
+async function renderBackupWizard() {
+  if (!backupWizard.el) return;
+  const phaseChip = backupWizard.el.querySelector('#bwPhaseChip');
+  const body = backupWizard.el.querySelector('#bwBody');
+  const actions = backupWizard.el.querySelector('#bwActions');
+  const phases = { A: 'Step 1 — Sources', B: 'Step 2 — Destination', C: 'Step 3 — Review', D: 'Step 4 — Running' };
+  phaseChip.textContent = phases[backupWizard.phase] || '';
+
+  if (backupWizard.phase === 'A') await renderPhaseA(body, actions);
+  else if (backupWizard.phase === 'B') await renderPhaseB(body, actions);
+  else if (backupWizard.phase === 'C') await renderPhaseC(body, actions);
+  else if (backupWizard.phase === 'D') await renderPhaseD(body, actions);
+}
+
+async function renderPhaseA(body, actions) {
+  // List existing scans with checkboxes + a button to plug & scan another.
+  let scans = [];
+  try { scans = (await fetch('/api/scans').then(r => r.json())).scans || []; } catch {}
+  body.innerHTML = `
+    <p style="color:var(--muted); font-size:0.85rem; margin-top:0;">
+      Pick which source drives belong in this backup. Tick existing scans, or add new ones by plugging a drive and scanning.
+    </p>
+    <div style="margin-bottom: 10px; font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">
+      Existing scans (${scans.length})
+    </div>
+    <div id="bwScanList" style="max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px;">
+      ${scans.length ? scans.map(s => {
+        const checked = backupWizard.selectedScans.has(s.file);
+        const h = s.header || {};
+        return `
+          <label style="display:flex !important; gap:8px; align-items:flex-start; padding:6px 8px; cursor:pointer; border-radius:6px; margin-bottom:0 !important; text-transform:none !important; letter-spacing:0 !important; color:var(--text) !important;${checked ? 'background: oklch(28% 0.04 200 / 0.4);' : ''}">
+            <input type="checkbox" class="bw-scan-check" data-file="${escapeHtml(s.file)}" ${checked ? 'checked' : ''} style="margin-top:3px; flex-shrink:0;" />
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; word-break:break-all; font-size:0.85rem; color:var(--text);">${escapeHtml(h.volumeName || s.file)}</div>
+              <div style="color:var(--muted); font-size:0.72rem; margin-top:2px;">
+                ${(h.fileCount||0).toLocaleString()} files · ${fmtSize(h.totalBytes||0)}
+                ${h.errorCount ? `· <span style="color:var(--danger)">${h.errorCount} errors</span>` : ''}
+              </div>
+            </div>
+          </label>
+        `;
+      }).join('') : '<div style="color:var(--muted);font-size:0.85rem;">No scans yet. Plug a drive below.</div>'}
+    </div>
+    <button id="bwPlugScanBtn" class="ghost-btn" style="margin-top: 12px; width: 100%;">+ Plug & scan another drive</button>
+  `;
+  body.querySelectorAll('.bw-scan-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) backupWizard.selectedScans.add(cb.dataset.file);
+      else backupWizard.selectedScans.delete(cb.dataset.file);
+      renderBackupWizard();
+    });
+  });
+  document.getElementById('bwPlugScanBtn').addEventListener('click', () => runPlugAndScan());
+
+  actions.innerHTML = `
+    <button class="ghost-btn" id="bwCancelBtn">Cancel</button>
+    <button class="primary-btn" id="bwNextBtn" ${backupWizard.selectedScans.size === 0 ? 'disabled' : ''}>
+      Next: pick destination →
+    </button>
+  `;
+  document.getElementById('bwCancelBtn').onclick = closeBackupWizard;
+  document.getElementById('bwNextBtn').onclick = () => { backupWizard.phase = 'B'; renderBackupWizard(); };
+}
+
+async function runPlugAndScan() {
+  // Mini sub-modal: pick a /Volumes target, scan it, then offer eject.
+  let volumes = [];
+  try { volumes = (await fetch('/api/volumes').then(r => r.json())).volumes || []; } catch {}
+  const candidates = volumes.filter(v => v.path.startsWith('/Volumes/'));
+  if (!candidates.length) {
+    alert('No drives detected under /Volumes/. Plug one in and try again.');
+    return;
+  }
+  const choice = prompt(`Which drive to scan? Type the name exactly:\n\n${candidates.map(v => '• ' + v.name).join('\n')}`);
+  if (!choice) return;
+  const v = candidates.find(x => x.name === choice.trim());
+  if (!v) { alert(`No drive named "${choice}".`); return; }
+  // Start scan via existing endpoint; show inline progress.
+  const body = backupWizard.el.querySelector('#bwBody');
+  body.innerHTML = `
+    <p>Scanning <strong>${escapeHtml(v.name)}</strong>…</p>
+    <div id="bwScanProg" style="background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:0.85rem;">
+      <div id="bwScanStats">Starting…</div>
+      <div id="bwScanDir" style="font-family: ui-monospace, monospace; font-size:0.72rem; color:var(--muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow: ellipsis;"></div>
+    </div>
+    <div id="bwScanDone" style="margin-top:14px;"></div>
+  `;
+  let started;
+  try {
+    started = await fetch('/api/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: v.path, skipTimeMachine: true }),
+    }).then(r => r.json());
+  } catch (e) { alert('Scan failed: ' + e.message); renderBackupWizard(); return; }
+  if (started.error) { alert('Scan failed: ' + started.error); renderBackupWizard(); return; }
+  const headerFile = started.file;
+  const statsEl = body.querySelector('#bwScanStats');
+  const dirEl = body.querySelector('#bwScanDir');
+  const doneEl = body.querySelector('#bwScanDone');
+  const poll = async () => {
+    try {
+      const data = await fetch('/scans/' + encodeURIComponent(headerFile) + '?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
+      statsEl.textContent = `${(data.fileCount||0).toLocaleString()} files · ${(data.dirCount||0).toLocaleString()} dirs · ${((data.durationMs||0)/1000).toFixed(1)}s`;
+      dirEl.textContent = data.currentDir || '';
+      if (data.done) {
+        clearInterval(timer);
+        backupWizard.selectedScans.add(headerFile);
+        doneEl.innerHTML = `
+          <strong style="color:var(--accent-2);">✓ Scan done — ${(data.fileCount||0).toLocaleString()} files · ${fmtSize(data.totalBytes||0)}</strong>
+          <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="ghost-btn" id="bwEjectBtn">⏏ Eject this drive</button>
+            <button class="primary-btn" id="bwPlugNextBtn">+ Plug next drive</button>
+            <button class="ghost-btn" id="bwBackToSourcesBtn">Done — back to sources</button>
+          </div>
+          <div id="bwEjectStatus" style="margin-top:8px; font-size:0.82rem; color:var(--muted);"></div>
+        `;
+        document.getElementById('bwEjectBtn').onclick = async () => {
+          const s = document.getElementById('bwEjectStatus');
+          s.textContent = 'Ejecting…';
+          try {
+            const r = await fetch('/api/eject', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: v.path }),
+            }).then(r => r.json());
+            if (r.error) s.innerHTML = `<span style="color:var(--danger)">Eject failed: ${escapeHtml(r.error)}</span>`;
+            else s.innerHTML = `<span style="color:var(--accent-2)">✓ Safe to unplug.</span>`;
+          } catch (e) { s.innerHTML = `<span style="color:var(--danger)">Eject failed: ${escapeHtml(e.message)}</span>`; }
+        };
+        document.getElementById('bwPlugNextBtn').onclick = () => runPlugAndScan();
+        document.getElementById('bwBackToSourcesBtn').onclick = () => renderBackupWizard();
+      }
+    } catch {}
+  };
+  const timer = setInterval(poll, 1000); poll();
+}
+
+async function renderPhaseB(body, actions) {
+  let volumes = [];
+  try { volumes = (await fetch('/api/volumes').then(r => r.json())).volumes || []; } catch {}
+  const opts = volumes.filter(v => v.path !== '/').map(v =>
+    `<option value="${escapeHtml(v.path)}" ${v.path === backupWizard.destination ? 'selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.path)}</option>`
+  ).join('');
+  body.innerHTML = `
+    <p style="color:var(--muted); font-size:0.85rem; margin-top:0;">
+      Pick the drive (or any folder) where the backup will be written. The destination must be plugged in now.
+    </p>
+    <label style="display:block; font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Destination
+      <div style="display:flex; gap:6px; margin-top:4px;">
+        <select id="bwDestSel" style="flex:1; min-width:0; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:8px 10px; border-radius:7px; font-size:0.9rem; text-transform:none;">
+          <option value="">Choose…</option>${opts}
+          ${backupWizard.destination && !volumes.some(v => v.path === backupWizard.destination) ? `<option value="${escapeHtml(backupWizard.destination)}" selected>📂 ${escapeHtml(backupWizard.destination)}</option>` : ''}
+        </select>
+        <button id="bwBrowseBtn" class="ghost-btn" type="button" style="white-space:nowrap; text-transform:none; font-size:0.85rem;">Browse…</button>
+      </div>
+      <div id="bwDestPath" style="margin-top:6px; font-family: ui-monospace, monospace; font-size:0.72rem; color:var(--muted);">${backupWizard.destination ? '→ ' + escapeHtml(backupWizard.destination) : ''}</div>
+    </label>
+  `;
+  document.getElementById('bwDestSel').addEventListener('change', e => {
+    backupWizard.destination = e.target.value;
+    document.getElementById('bwDestPath').textContent = backupWizard.destination ? '→ ' + backupWizard.destination : '';
+    renderPhaseBActions();
+  });
+  document.getElementById('bwBrowseBtn').addEventListener('click', async () => {
+    try {
+      const resp = await fetch('/api/choose-folder', { method: 'POST' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const r = await resp.json();
+      if (r.cancelled) return;
+      if (r.error) { toast('Pick failed: ' + r.error, 'error'); return; }
+      backupWizard.destination = r.path;
+      renderPhaseB(body, actions);
+    } catch (e) { toast('Pick failed: ' + e.message, 'error'); }
+  });
+  renderPhaseBActions();
+
+  function renderPhaseBActions() {
+    actions.innerHTML = `
+      <button class="ghost-btn" id="bwBackBtn">← Back</button>
+      <button class="primary-btn" id="bwBuildBtn" ${backupWizard.destination ? '' : 'disabled'}>Build plan →</button>
+    `;
+    document.getElementById('bwBackBtn').onclick = () => { backupWizard.phase = 'A'; renderBackupWizard(); };
+    document.getElementById('bwBuildBtn').onclick = () => buildBackupPlan();
+  }
+}
+
+async function buildBackupPlan() {
+  const body = backupWizard.el.querySelector('#bwBody');
+  body.innerHTML = `<p>Building plan…</p><div id="bwBuildStatus" style="color:var(--muted); font-size:0.85rem;">Submitting…</div>`;
+  try {
+    const r = await fetch('/api/plan/build', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceScans: [...backupWizard.selectedScans],
+        destination: backupWizard.destination,
+        layout: backupWizard.layout,
+        tieBreak: backupWizard.tieBreak,
+        destMode: backupWizard.destMode,
+      }),
+    }).then(r => r.json());
+    if (r.error) {
+      document.getElementById('bwBuildStatus').textContent = 'Error: ' + r.error;
+      return;
+    }
+    const planId = r.planId;
+    const planFile = planId + '.plan.json';
+    const statusEl = document.getElementById('bwBuildStatus');
+    const t = setInterval(async () => {
+      try {
+        const s = await fetch('/api/plan/status?id=' + encodeURIComponent(planId)).then(r => r.json());
+        const p = s.progress || {};
+        statusEl.textContent = `${p.phase || '...'}${p.processed ? ' · ' + (p.processed).toLocaleString() + ' records' : ''}`;
+        if (s.status === 'done') {
+          clearInterval(t);
+          backupWizard.builtPlanFile = planFile;
+          backupWizard.phase = 'C';
+          renderBackupWizard();
+        } else if (s.status === 'failed') {
+          clearInterval(t);
+          statusEl.textContent = 'Build failed: ' + (s.error || 'unknown');
+        }
+      } catch {}
+    }, 700);
+  } catch (e) {
+    document.getElementById('bwBuildStatus').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function renderPhaseC(body, actions) {
+  body.innerHTML = `<p>Loading plan…</p>`;
+  let plan = null;
+  try { plan = (await fetch('/api/plans').then(r => r.json())).plans.find(p => p.file === backupWizard.builtPlanFile)?.header; } catch {}
+  if (!plan) { body.innerHTML = '<p style="color:var(--danger)">Plan vanished. Try again.</p>'; return; }
+  // Verify sources upfront.
+  let verify = null;
+  try {
+    verify = await fetch('/api/plan/verify-sources', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: backupWizard.builtPlanFile }),
+    }).then(r => r.json());
+  } catch {}
+  const v = verify || { totalPending: plan.totalFiles, ok: 0, missing: 0, driveOffline: 0, perDrive: [] };
+  const issuesRows = (v.perDrive || []).filter(d => d.missing || d.driveOffline).map(d =>
+    `<li>${escapeHtml(d.drive)}: ${d.missing} missing${d.driveOffline ? ` · ${d.driveOffline} drive offline` : ''} (of ${d.total})</li>`
+  ).join('');
+  body.innerHTML = `
+    <p style="color:var(--muted); font-size:0.85rem; margin-top:0;">
+      Review what's about to copy. Click <strong>Run backup</strong> to start.
+    </p>
+    <div style="background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:12px;">
+      <div style="font-size:1.1rem; font-weight:600;">${plan.totalFiles.toLocaleString()} unique files · ${fmtSize(plan.totalBytes)}</div>
+      <div style="color:var(--muted); font-size:0.82rem; margin-top:4px;">
+        ${plan.sources.length} source(s) → ${escapeHtml(plan.destination)}<br>
+        ${plan.duplicatesCollapsed.toLocaleString()} loose-file duplicates collapsed${plan.errorCount ? ` · ${plan.errorCount} source-errors` : ''}
+        ${plan.projectDuplicatesCollapsed ? `<br>${plan.projectDuplicatesCollapsed.toLocaleString()} files inside duplicate projects collapsed` : ''}
+      </div>
+    </div>
+    ${plan.projectDedup && plan.projectDedup.enabled ? `
+      <div style="background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">
+          Projects detected (${plan.projectDedup.projectsKept + plan.projectDedup.projectsCollapsed}) ·
+          ${plan.projectDedup.projectsKept} kept · ${plan.projectDedup.projectsCollapsed} collapsed
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap: wrap;">
+          ${Object.entries(plan.projectDedup.byRule || {}).map(([name, stats]) => `
+            <span style="background:var(--panel); border:1px solid var(--border); border-radius:4px; padding: 4px 8px; font-size:0.78rem;">
+              <strong>${escapeHtml(name)}</strong>:
+              ${stats.kept} kept${stats.collapsed ? ` · ${stats.collapsed} collapsed` : ''}
+            </span>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+    ${(v.missing || v.driveOffline) ? `
+      <div style="background: oklch(28% 0.04 60 / 0.4); border:1px solid var(--danger); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
+        <strong>⚠ Source verification found issues:</strong>
+        <ul style="margin:8px 0 0 18px; font-size:0.85rem;">${issuesRows}</ul>
+        <div style="font-size:0.78rem; color:var(--muted); margin-top:8px;">
+          Missing files will be marked <code>source-missing</code>. Drives offline will trigger a swap prompt during the run.
+        </div>
+      </div>
+    ` : `<div style="color:var(--accent-2); font-size:0.85rem; margin-bottom:12px;">✓ All ${(v.ok||0).toLocaleString()} source files verified reachable.</div>`}
+    <details>
+      <summary style="cursor:pointer; color:var(--muted); font-size:0.85rem;">Settings (advanced)</summary>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-top:10px;">
+        <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Layout
+          <select id="bwLayout" style="display:block; width:100%; margin-top:4px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:6px 8px; border-radius:6px; font-size:0.85rem; text-transform:none;">
+            <option value="mirrored" ${plan.layout==='mirrored'?'selected':''}>Mirrored per drive</option>
+            <option value="flat" ${plan.layout==='flat'?'selected':''}>Flat</option>
+          </select>
+        </label>
+        <label style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Dest mode
+          <select id="bwDestMode" style="display:block; width:100%; margin-top:4px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); padding:6px 8px; border-radius:6px; font-size:0.85rem; text-transform:none;">
+            <option value="additive" ${plan.destMode==='additive'?'selected':''}>Additive</option>
+            <option value="overwrite" ${plan.destMode==='overwrite'?'selected':''}>Overwrite</option>
+            <option value="fresh" ${plan.destMode==='fresh'?'selected':''}>Fresh (empty dest)</option>
+          </select>
+        </label>
+      </div>
+    </details>
+  `;
+  // Wire setting tweaks to push to plan immediately.
+  const wireSet = (id, key) => document.getElementById(id)?.addEventListener('change', async e => {
+    plan[key] = e.target.value;
+    await fetch('/api/plan/update-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: backupWizard.builtPlanFile, [key]: e.target.value }),
+    });
+  });
+  wireSet('bwLayout', 'layout');
+  wireSet('bwDestMode', 'destMode');
+
+  actions.innerHTML = `
+    <button class="ghost-btn" id="bwBackBtn">← Back</button>
+    <button class="primary-btn" id="bwRunBtn">Run backup ▶</button>
+  `;
+  document.getElementById('bwBackBtn').onclick = () => { backupWizard.phase = 'B'; renderBackupWizard(); };
+  document.getElementById('bwRunBtn').onclick = () => {
+    if (v.missing || v.driveOffline) {
+      if (!confirm(`Continue?\n\n${v.missing} files missing on disk, ${v.driveOffline} files on offline drives.\nMissing files get status 'source-missing'; offline drives will prompt for a swap.`)) return;
+    }
+    runBackup();
+  };
+}
+
+async function runBackup() {
+  try {
+    const r = await fetch('/api/plan/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planFile: backupWizard.builtPlanFile }),
+    }).then(r => r.json());
+    if (r.error) { toast('Run failed: ' + r.error, 'error'); return; }
+    closeBackupWizard();
+    toast(`Backup running. Watch the bottom-left panel for progress.`);
+    // Switch active plan so the user can see it in the main UI.
+    state.activePlanFile = backupWizard.builtPlanFile;
+    localStorage.setItem('wn_active_plan', state.activePlanFile);
+    await refreshPlanFromServer();
+    startRunPolling();
+  } catch (e) { toast('Run failed: ' + e.message, 'error'); }
+}
+
+document.getElementById('backupWizardBtn').addEventListener('click', openBackupWizard);
+
+// ===== Project detection settings + rule builder =====
+let projectDedupCfg = null;
+
+async function loadProjectDedupCfg() {
+  try {
+    const s = await fetch('/api/settings').then(r => r.json());
+    projectDedupCfg = s.projectDedup || { enabled: true, similarityThreshold: 0.9, rules: [], opaquePaths: [] };
+  } catch { projectDedupCfg = { enabled: true, similarityThreshold: 0.9, rules: [], opaquePaths: [] }; }
+}
+async function saveProjectDedupCfg() {
+  await fetch('/api/settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectDedup: projectDedupCfg }),
+  });
+}
+
+function openProjectDedupModal() {
+  if (document.getElementById('projDedupModal')) return;
+  const back = document.createElement('div');
+  back.className = 'modal-backdrop'; back.id = 'projDedupModal';
+  back.innerHTML = `
+    <div class="modal" style="max-width: 820px; max-height: 92vh;">
+      <h3>⚙ Project detection</h3>
+      <p style="color:var(--muted); font-size:0.85rem; margin-top:0;">
+        Detect project folders (Node, Git, Ableton, Xcode, etc.) and treat each project as a unit when deduping a backup.
+        Two folders that match the same rule and share most of their files become one in the backup.
+      </p>
+      <div id="pdBody" style="overflow-y:auto; max-height: 60vh;"></div>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="pdCloseBtn">Done</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+  back.querySelector('#pdCloseBtn').onclick = async () => { await saveProjectDedupCfg(); back.remove(); };
+  renderProjectDedupBody();
+}
+
+function renderProjectDedupBody() {
+  const body = document.querySelector('#projDedupModal #pdBody');
+  if (!body || !projectDedupCfg) return;
+  const cfg = projectDedupCfg;
+  body.innerHTML = `
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <label style="display:flex !important; align-items:center; gap:8px; margin-bottom:0 !important; text-transform:none !important; letter-spacing:0 !important; color:var(--text) !important;">
+        <input type="checkbox" id="pdEnabled" ${cfg.enabled ? 'checked' : ''} style="margin:0; flex-shrink:0;" />
+        <span style="font-weight:600;">Enable project detection + dedup</span>
+      </label>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+      <span style="font-size:0.85rem; color:var(--muted);">Similarity threshold</span>
+      <input id="pdThreshold" type="range" min="50" max="100" step="5" value="${Math.round((cfg.similarityThreshold||0.9)*100)}" />
+      <span id="pdThresholdLabel" style="font-variant-numeric: tabular-nums; min-width: 3em;">${Math.round((cfg.similarityThreshold||0.9)*100)}%</span>
+      <span style="font-size:0.72rem; color:var(--muted);">two folders must share this much to count as duplicates</span>
+    </div>
+
+    <div style="margin-bottom:8px; font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Opaque paths (skipped when comparing, copied with winner)</div>
+    <textarea id="pdOpaque" rows="3" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px; font-family: ui-monospace, monospace; font-size:0.82rem;">${(cfg.opaquePaths||[]).join('\n')}</textarea>
+    <div style="font-size:0.72rem; color:var(--muted); margin-top:4px;">one per line — e.g. node_modules, .git, dist</div>
+
+    <div style="margin: 18px 0 6px; display:flex; align-items:center; gap:10px;">
+      <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Project rules</div>
+      <button id="pdAddRule" class="ghost-btn" style="font-size:0.7rem; padding:2px 8px;">+ Add rule</button>
+      <button id="pdResetRules" class="ghost-btn" style="font-size:0.7rem; padding:2px 8px; border-color: var(--danger); color: var(--danger);">Reset to defaults</button>
+    </div>
+    <div id="pdRulesList"></div>
+  `;
+  document.getElementById('pdEnabled').onchange = e => { cfg.enabled = e.target.checked; };
+  const slider = document.getElementById('pdThreshold');
+  slider.onchange = () => {
+    cfg.similarityThreshold = (+slider.value) / 100;
+    document.getElementById('pdThresholdLabel').textContent = slider.value + '%';
+  };
+  document.getElementById('pdOpaque').onchange = e => {
+    cfg.opaquePaths = e.target.value.split('\n').map(s => s.trim()).filter(Boolean);
+  };
+  document.getElementById('pdAddRule').onclick = () => {
+    cfg.rules = cfg.rules || [];
+    cfg.rules.push({ id: 'custom_' + Date.now(), name: 'New rule', color: 'gray', expr: { op: 'and', items: [] } });
+    renderProjectDedupBody();
+  };
+  document.getElementById('pdResetRules').onclick = async () => {
+    if (!confirm('Reset all rules to built-in defaults? Your custom rules will be lost.')) return;
+    try {
+      const r = await fetch('/api/settings/project-rules/reset', { method: 'POST' }).then(r => r.json());
+      projectDedupCfg = r.projectDedup;
+      renderProjectDedupBody();
+    } catch (e) { toast('Reset failed: ' + e.message, 'error'); }
+  };
+  renderRulesList();
+}
+
+const COLOR_OPTIONS = ['green','yellow','blue','orange','purple','pink','teal','red','gray'];
+const COLOR_HEX = {
+  green: '#3fb46e', yellow: '#d6b656', blue: '#5e9ef0', orange: '#e08a3c',
+  purple: '#a978e0', pink: '#e87aaa', teal: '#3fb4b4', red: '#e36b6b', gray: '#888'
+};
+
+function renderRulesList() {
+  const list = document.getElementById('pdRulesList');
+  const cfg = projectDedupCfg;
+  list.innerHTML = (cfg.rules || []).map((rule, i) => `
+    <div class="pd-rule" style="background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid ${COLOR_HEX[rule.color]||'#888'}; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom: 8px;">
+        <input class="pd-rule-name" data-i="${i}" value="${escapeHtml(rule.name||'')}" style="flex:1; background:transparent; border:none; color:var(--text); font-weight:600; font-size:0.95rem; padding:2px 4px;" />
+        <select class="pd-rule-color" data-i="${i}" style="background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:0.78rem;">
+          ${COLOR_OPTIONS.map(c => `<option value="${c}" ${rule.color===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <button class="pd-rule-del" data-i="${i}" style="background:transparent; border:1px solid var(--danger); color:var(--danger); border-radius:4px; padding:2px 8px; cursor:pointer; font-size:0.72rem;">Delete</button>
+      </div>
+      <div class="pd-rule-expr" data-i="${i}">${renderExpr(rule.expr, [i])}</div>
+    </div>
+  `).join('') || '<div style="color:var(--muted); font-size:0.85rem;">No rules defined.</div>';
+
+  list.querySelectorAll('.pd-rule-name').forEach(inp => {
+    inp.onchange = () => { cfg.rules[+inp.dataset.i].name = inp.value; };
+  });
+  list.querySelectorAll('.pd-rule-color').forEach(sel => {
+    sel.onchange = () => { cfg.rules[+sel.dataset.i].color = sel.value; renderRulesList(); };
+  });
+  list.querySelectorAll('.pd-rule-del').forEach(btn => {
+    btn.onclick = () => {
+      if (!confirm(`Delete rule "${cfg.rules[+btn.dataset.i].name}"?`)) return;
+      cfg.rules.splice(+btn.dataset.i, 1);
+      renderRulesList();
+    };
+  });
+  wireExprControls();
+}
+
+function renderExpr(expr, path) {
+  // Recursive renderer. path = array index path to locate this node.
+  if (!expr) return renderEmptyExpr(path);
+  const pathStr = JSON.stringify(path);
+  if (expr.op === 'and' || expr.op === 'or') {
+    return `
+      <div class="pd-group" data-path='${pathStr}' style="border:1px dashed var(--border); border-radius:6px; padding:6px 8px;">
+        <div style="display:flex; gap:6px; align-items:center; margin-bottom: 6px;">
+          <select class="pd-group-op" data-path='${pathStr}'>
+            <option value="and" ${expr.op==='and'?'selected':''}>ALL of (AND)</option>
+            <option value="or" ${expr.op==='or'?'selected':''}>ANY of (OR)</option>
+          </select>
+          <button class="pd-add-cond" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:4px; cursor:pointer;">+ condition</button>
+          <button class="pd-add-group" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:4px; cursor:pointer;">+ group</button>
+          <button class="pd-add-not" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:4px; cursor:pointer;">+ NOT</button>
+          ${path.length > 1 ? `<button class="pd-rm" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--danger); color:var(--danger); border-radius:4px; cursor:pointer; margin-left:auto;">×</button>` : ''}
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          ${(expr.items || []).map((item, i) => renderExpr(item, [...path, 'items', i])).join('')}
+        </div>
+      </div>
+    `;
+  }
+  if (expr.op === 'not') {
+    return `
+      <div class="pd-group" data-path='${pathStr}' style="border:1px dashed var(--danger); border-radius:6px; padding:6px 8px;">
+        <div style="display:flex; gap:6px; align-items:center; margin-bottom: 4px;">
+          <span style="color: var(--danger); font-size:0.8rem; font-weight:600;">NOT</span>
+          <button class="pd-rm" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--danger); color:var(--danger); border-radius:4px; cursor:pointer; margin-left:auto;">×</button>
+        </div>
+        ${renderExpr(expr.expr, [...path, 'expr'])}
+      </div>
+    `;
+  }
+  // Leaf condition.
+  const ops = [
+    ['file', 'contains file', 'package.json'],
+    ['dir', 'contains folder', 'node_modules'],
+    ['count', 'has ≥N files matching', '*.als'],
+    ['name', 'folder name matches', '*-project'],
+    ['depth', 'folder depth ≥', null],
+  ];
+  return `
+    <div class="pd-cond" data-path='${pathStr}' style="display:flex; gap:6px; align-items:center; background: var(--panel); border:1px solid var(--border); border-radius:5px; padding: 4px 6px;">
+      <select class="pd-cond-op" data-path='${pathStr}' style="font-size:0.78rem;">
+        ${ops.map(([o, label]) => `<option value="${o}" ${expr.op===o?'selected':''}>${label}</option>`).join('')}
+      </select>
+      ${expr.op === 'depth'
+        ? `<input class="pd-cond-min" type="number" min="0" value="${expr.min||0}" data-path='${pathStr}' style="width:60px; font-family:ui-monospace,monospace; font-size:0.82rem;" />`
+        : expr.op === 'count'
+          ? `<input class="pd-cond-glob" value="${escapeHtml(expr.glob||'')}" data-path='${pathStr}' style="flex:1; min-width:0; font-family:ui-monospace,monospace; font-size:0.82rem;" />
+             <span style="font-size:0.78rem;">≥</span>
+             <input class="pd-cond-min" type="number" min="1" value="${expr.min||1}" data-path='${pathStr}' style="width:60px; font-family:ui-monospace,monospace; font-size:0.82rem;" />`
+          : `<input class="pd-cond-glob" value="${escapeHtml(expr.glob||'')}" data-path='${pathStr}' style="flex:1; min-width:0; font-family:ui-monospace,monospace; font-size:0.82rem;" />`
+      }
+      <button class="pd-rm" data-path='${pathStr}' style="font-size:0.7rem; padding:2px 8px; background:transparent; border:1px solid var(--danger); color:var(--danger); border-radius:4px; cursor:pointer;">×</button>
+    </div>
+  `;
+}
+function renderEmptyExpr(path) {
+  return renderExpr({ op: 'and', items: [] }, path);
+}
+
+function getNodeAtPath(rules, path) {
+  // path = [ruleIndex, 'expr', 'items', i, ...]
+  let node = rules[path[0]];
+  let parent = null, lastKey = null;
+  for (let i = 1; i < path.length; i++) {
+    parent = node;
+    lastKey = path[i];
+    node = node[path[i]];
+  }
+  return { node, parent, lastKey };
+}
+function setNodeAtPath(rules, path, value) {
+  const { parent, lastKey } = getNodeAtPath(rules, path);
+  if (parent) parent[lastKey] = value;
+}
+
+function wireExprControls() {
+  const cfg = projectDedupCfg;
+  // Add the implicit '.expr' segment for top-level rule expression access.
+  const fullPath = pathStr => {
+    const p = JSON.parse(pathStr);
+    // p = [ruleIndex, ...] — we need [ruleIndex, 'expr', ...] for the rule.expr.
+    return [p[0], 'expr', ...p.slice(1)];
+  };
+
+  document.querySelectorAll('.pd-group-op').forEach(sel => {
+    sel.onchange = () => {
+      const p = fullPath(sel.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.op = sel.value;
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-add-cond').forEach(btn => {
+    btn.onclick = () => {
+      const p = fullPath(btn.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.items = node.items || [];
+      node.items.push({ op: 'file', glob: 'package.json' });
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-add-group').forEach(btn => {
+    btn.onclick = () => {
+      const p = fullPath(btn.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.items = node.items || [];
+      node.items.push({ op: 'and', items: [] });
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-add-not').forEach(btn => {
+    btn.onclick = () => {
+      const p = fullPath(btn.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.items = node.items || [];
+      node.items.push({ op: 'not', expr: { op: 'file', glob: '*' } });
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-rm').forEach(btn => {
+    btn.onclick = () => {
+      const p = fullPath(btn.dataset.path);
+      // Remove from parent's items array OR null out expr for a NOT.
+      const lastKey = p[p.length - 1];
+      const parentPath = p.slice(0, -1);
+      const { node: parent } = getNodeAtPath(cfg.rules, parentPath);
+      if (Array.isArray(parent)) parent.splice(lastKey, 1);
+      else if (typeof lastKey === 'number') parent.splice(lastKey, 1);
+      else delete parent[lastKey];
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-cond-op').forEach(sel => {
+    sel.onchange = () => {
+      const p = fullPath(sel.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.op = sel.value;
+      // Adjust shape for the new op.
+      if (sel.value === 'depth') { delete node.glob; node.min = node.min || 1; }
+      else if (sel.value === 'count') { node.glob = node.glob || '*'; node.min = node.min || 1; }
+      else { node.glob = node.glob || '*'; delete node.min; }
+      renderRulesList();
+    };
+  });
+  document.querySelectorAll('.pd-cond-glob').forEach(inp => {
+    inp.onchange = () => {
+      const p = fullPath(inp.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.glob = inp.value;
+    };
+  });
+  document.querySelectorAll('.pd-cond-min').forEach(inp => {
+    inp.onchange = () => {
+      const p = fullPath(inp.dataset.path);
+      const { node } = getNodeAtPath(cfg.rules, p);
+      node.min = parseInt(inp.value, 10) || 0;
+    };
+  });
+}
+
+document.getElementById('openProjectDedupBtn')?.addEventListener('click', async () => {
+  if (!projectDedupCfg) await loadProjectDedupCfg();
+  openProjectDedupModal();
+});
+
+// ===== Trash retention setting =====
+(async () => {
+  const sel = document.getElementById('trashRetentionSelect');
+  if (!sel) return;
+  try {
+    const s = await fetch('/api/settings').then(r => r.json());
+    sel.value = s.trashRetention || 'forever';
+  } catch {}
+  sel.addEventListener('change', async () => {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trashRetention: sel.value }),
+      });
+      toast(`Trash log retention set to ${sel.value}.`);
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  });
+})();
+
+loadVolumes();
+(async () => {
+  await loadScans();
+  // If a scan is currently running on the server (e.g. page was reloaded mid-scan),
+  // reattach so the progress panel + Pause / Cancel buttons reappear.
+  try {
+    const active = await fetch('/api/active-scan').then(r => r.json());
+    if (active && active.file && !active.done) {
+      reattachLiveScan(active);
+      return; // skip loading saved scans — we're watching the live one.
+    }
+  } catch {}
+  // If we rehydrated a selection from localStorage, actually populate the view.
+  if (state.selectedScans && state.selectedScans.size > 0) {
+    await loadSelectedScans();
+  }
+})();
+updateBasketUI();
+
+function reattachLiveScan(active) {
+  const progressEl = document.getElementById('scanProgress');
+  progressEl.style.display = 'block';
+  progressEl.innerHTML = `
+    <strong>Scanning ${escapeHtml(active.root || '')}</strong>
+    <div class="progress-stats">Reattaching…</div>
+    <div class="progress-dir"></div>
+    <div class="scan-controls" style="margin-top:10px; display:flex; gap:8px;">
+      <button id="scanPauseBtn" class="ghost-btn">Pause</button>
+      <button id="scanCancelBtn" class="ghost-btn" style="border-color: var(--danger); color: var(--danger);">Cancel</button>
+    </div>
+  `;
+  document.getElementById('scanPauseBtn').addEventListener('click', toggleScanPause);
+  document.getElementById('scanCancelBtn').addEventListener('click', cancelScan);
+
+  const statsEl = progressEl.querySelector('.progress-stats');
+  const dirEl = progressEl.querySelector('.progress-dir');
+  let ndjsonBytesRead = 0;
+  let ndjsonLeftover = '';
+  state.files = [];
+  state.activeScan = active.file;
+
+  async function fetchNewNdjson() {
+    if (!active.ndjson) return;
+    const r = await fetch('/scans/' + encodeURIComponent(active.ndjson), {
+      cache: 'no-store',
+      headers: { 'Range': `bytes=${ndjsonBytesRead}-` },
+    });
+    if (!r.ok && r.status !== 206 && r.status !== 200) return;
+    const chunk = await r.text();
+    if (!chunk) return;
+    ndjsonBytesRead += new TextEncoder().encode(chunk).length;
+    const text = ndjsonLeftover + chunk;
+    let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) {
+        const line = text.slice(start, i);
+        start = i + 1;
+        if (line) { try { state.files.push(prepareFileRecord(JSON.parse(line))); } catch {} }
+      }
+    }
+    ndjsonLeftover = text.slice(start);
+  }
+
+  async function pollOnce() {
+    try {
+      const r = await fetch('/scans/' + encodeURIComponent(active.file) + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const pausedTag = data.paused ? ' · ⏸ PAUSED' : '';
+      statsEl.textContent = `${(data.fileCount||0).toLocaleString()} files · ${(data.dirCount||0).toLocaleString()} dirs · ${((data.durationMs||0)/1000).toFixed(1)}s${pausedTag}`;
+      dirEl.textContent = data.currentDir || '';
+      const pauseBtn = document.getElementById('scanPauseBtn');
+      if (pauseBtn) pauseBtn.textContent = data.paused ? 'Resume' : 'Pause';
+      await fetchNewNdjson();
+      populateExtFilter();
+      populateTopFolderFilter();
+      applyFilters();
+      renderStats(data);
+      if (data.done) {
+        clearInterval(pollTimer); pollTimer = null;
+        progressEl.style.display = 'none';
+        await fetchNewNdjson();
+        populateExtFilter();
+        populateTopFolderFilter();
+        applyFilters();
+        renderStats(data);
+        await loadScans();
+      }
+    } catch {}
+  }
+  pollTimer = setInterval(pollOnce, 1000);
+  pollOnce();
+}
+</script>
+</body>
+</html>
